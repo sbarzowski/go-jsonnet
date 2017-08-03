@@ -328,7 +328,7 @@ type astLocal struct {
 // astLiteralBoolean represents true and false
 type astLiteralBoolean struct {
 	astNodeBase
-	value bool
+	value bool `kind:"param"`
 }
 
 // ---------------------------------------------------------------------------

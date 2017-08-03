@@ -83,7 +83,7 @@ func (cache *ImportCache) ImportCode(codeDir, importedPath string, e *evaluator)
 		return nil, data.err
 	}
 	if data.asCode == nil {
-		ast, err := snippetToAST(data.data.foundHere, data.data.content)
+		ast, err := SnippetToAST(data.data.foundHere, data.data.content)
 		if err != nil {
 			// TODO(sbarzowski) perhaps we should wrap (static) error here
 			// within a RuntimeError? Because whether we get this error or not

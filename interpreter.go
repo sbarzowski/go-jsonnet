@@ -663,7 +663,7 @@ func evaluateStd(i *interpreter) (value, error) {
 	)
 	evalLoc := makeLocationRangeMessage("During evaluation of std")
 	evalTrace := &TraceElement{loc: &evalLoc}
-	ast, err := snippetToAST("std.jsonnet", getStdCode())
+	ast, err := SnippetToAST("std.jsonnet", getStdCode())
 	if err != nil {
 		return nil, err
 	}
