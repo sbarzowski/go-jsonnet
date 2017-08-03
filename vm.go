@@ -67,7 +67,7 @@ func (vm *VM) ExtCode(key string, val string) {
 }
 
 func (vm *VM) evaluateSnippet(filename string, snippet string) (string, error) {
-	ast, err := snippetToAST(filename, snippet)
+	ast, err := SnippetToAST(filename, snippet)
 	if err != nil {
 		return "", err
 	}
@@ -95,7 +95,7 @@ func (vm *VM) EvaluateSnippet(filename string, snippet string) (json string, for
 	return json, nil
 }
 
-func snippetToAST(filename string, snippet string) (astNode, error) {
+func SnippetToAST(filename string, snippet string) (astNode, error) {
 	tokens, err := lex(filename, snippet)
 	if err != nil {
 		return nil, err
