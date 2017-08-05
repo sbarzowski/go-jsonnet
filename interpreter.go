@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"fmt"
 	"math"
+	"path"
 	"reflect"
 	"sort"
 )
@@ -40,211 +41,68 @@ type vmExtMap map[string]vmExt
 type RuntimeError struct {
 	StackTrace []TraceFrame
 	Msg        string
+	trace      *TraceElement
 }
 
-func makeRuntimeError(loc *LocationRange, msg string) RuntimeError {
-	// TODO(dcunnin): Build proper stacktrace.
+func (t *TraceElement) TraceFrames() []TraceFrame {
+	var frames []TraceFrame
+	for t != nil {
+		frames = append(frames, TraceFrame{*t.loc, t.context.Name})
+	}
+	return frames
+}
+
+func buildStackTrace(frames []TraceFrame) string {
+	// std::stringstream ss;
+	// ss << "RUNTIME ERROR: " << e.msg << std::endl;
+	// const long max_above = vm->maxTrace / 2;
+	// const long max_below = vm->maxTrace - max_above;
+	// const long sz = e.stackTrace.size();
+	// for (long i = 0; i < sz; ++i) {
+	//     const auto &f = e.stackTrace[i];
+	//     if (vm->maxTrace > 0 && i >= max_above && i < sz - max_below) {
+	//         if (i == max_above)
+	//             ss << "\t..." << std::endl;
+	//     } else {
+	//         ss << "\t" << f.location << "\t" << f.name << std::endl;
+	//     }
+	// }
+	// *error = true;
+	// return from_string(vm, ss.str());
+	var buf bytes.Buffer
+	for _, f := range frames {
+		fmt.Fprintf(&buf, "\t%v\t%v\n", &f.Loc, f.Name)
+	}
+	return buf.String()
+}
+
+func makeRuntimeError(msg string, stackTrace []TraceFrame) RuntimeError {
 	return RuntimeError{
-		StackTrace: []TraceFrame{
-			{
-				Loc:  *loc,
-				Name: "name",
-			},
-		},
-		Msg: msg,
+		Msg:        msg,
+		StackTrace: stackTrace,
 	}
 }
 
 func (err RuntimeError) Error() string {
-	// TODO(dcunnin): Include stacktrace.
-	return err.Msg
+	return oneLineErrorFormat(&err)
 }
 
-// Values and state
-
-type value interface {
-	aValue()
+type errorThunk struct {
+	err error
 }
 
-type valueBase struct{}
-
-func (v *valueBase) aValue() {}
-
-// Something that may get evaluated to a value
-// It may or may not result in computation.
-// Getting the value a second time may or may not result in additional evaluation.
-//
-// TODO(sbarzowski) Maybe it should always be cached, also for objects etc.?
-type potentialValue interface {
-	getValue(i *interpreter, loc *LocationRange) (value, error)
+func (th *errorThunk) getValue(i *interpreter, trace *TraceElement) (value, error) {
+	return nil, th.err
 }
 
-type bindingFrame map[identifier]potentialValue
-
-type valueString struct {
-	valueBase
-	value string
+func makeErrorThunk(err error) *errorThunk {
+	return &errorThunk{err}
 }
-
-func makeValueString(v string) *valueString {
-	return &valueString{value: v}
-}
-
-type valueBoolean struct {
-	valueBase
-	value bool
-}
-
-func makeValueBoolean(v bool) *valueBoolean {
-	return &valueBoolean{value: v}
-}
-
-type valueNumber struct {
-	valueBase
-	value float64
-}
-
-func makeValueNumber(v float64) *valueNumber {
-	return &valueNumber{value: v}
-}
-
-// TODO(dcunnin): Maybe intern values null, true, and false?
-type valueNull struct {
-	valueBase
-}
-
-func makeValueNull() *valueNull {
-	return &valueNull{}
-}
-
-type valueArray struct {
-	valueBase
-	elements []*thunk
-}
-
-func makeValueArray(elements []*thunk) *valueArray {
-	return &valueArray{
-		elements: elements,
-	}
-}
-
-type valueClosure struct {
-	valueBase
-	upValues bindingFrame
-	self     value
-	offset   int
-	function *astFunction
-}
-
-func (v *valueClosure) aValue() {}
-
-func makeValueClosure(upValues bindingFrame, function *astFunction) *valueClosure {
-	return &valueClosure{
-		upValues: upValues,
-		function: function,
-	}
-}
-
-type valueSimpleObjectField struct {
-	hide astObjectFieldHide
-	body astNode
-}
-
-type valueSimpleObjectFieldMap map[string]valueSimpleObjectField
-
-type valueSimpleObject struct {
-	valueBase
-	upValues bindingFrame
-	fields   valueSimpleObjectFieldMap
-	asserts  []astNode
-}
-
-// findObject returns an object in which there is a given field.
-// It is used for field lookups, potentially involving super.
-func findObject(f string, curr value, startFrom int, counter *int) value {
-	switch curr := curr.(type) {
-	// case *valueExtendedObject:
-	// TODO(dcunnin): this
-
-	case *valueSimpleObject:
-		if *counter >= startFrom {
-			if _, ok := curr.fields[f]; ok {
-				return curr
-			}
-		}
-		*counter++
-
-		// case *valueComprehensionObject:
-		/*
-			if *counter >= startFrom {
-				// TODO(dcunnin): this
-			}
-			*counter++
-		*/
-	}
-	return nil
-}
-
-func objectIndex(loc *LocationRange, obj value, f string, offset int) (potentialValue, error) {
-	var foundAt int
-	found := findObject(f, obj, offset, &foundAt)
-	if found == nil {
-		return nil, makeRuntimeError(loc, fmt.Sprintf("Field does not exist: %s", f))
-	}
-	switch found := found.(type) {
-	case *valueSimpleObject:
-		self := found
-		offset := foundAt
-		upValues := bindingFrame{}
-		field := found.fields[f]
-
-		return makeThunk("???", makeEnvironment(upValues, self, offset), field.body), nil
-	// case *valueComprehensionObject:
-	/*
-		// TODO(dcunnin): this
-	*/
-	default:
-		return nil, fmt.Errorf("Internal error: findObject returned unrecognized type: %s", reflect.TypeOf(found))
-	}
-}
-
-func makeValueSimpleObject(b bindingFrame, fields valueSimpleObjectFieldMap, asserts astNodes) *valueSimpleObject {
-	return &valueSimpleObject{
-		upValues: b,
-		fields:   fields,
-		asserts:  asserts,
-	}
-}
-
-func (v *valueSimpleObject) aValue() {}
-
-// TODO(sbarzowski) what is extendedObject supposed to be?
-// TODO(dcunnin): extendedObject
-// TODO(dcunnin): comprehensionObject
-// TODO(dcunnin): closure
 
 // TODO(sbarzowski) use it as a pointer in most places b/c it can sometimes be shared
 // for example it can be shared between array elements and function arguments
 type environment struct {
-	// The lexically nearest object we are in, or nil.  Note
-	// that this is not the same as context, because we could be inside a function,
-	// inside an object and then context would be the function, but self would still point
-	// to the object.
-	self value
-
-	// The "super" level of self.  Sometimes, we look upwards in the
-	// inheritance tree, e.g. via an explicit use of super, or because a given field
-	// has been inherited.  When evaluating a field from one of these super objects,
-	// we need to bind self to the concrete object (so self must point
-	// there) but uses of super should be resolved relative to the object whose
-	// field we are evaluating.  Thus, we keep a second field for that.  This is
-	// usually 0, unless we are evaluating a super object's field.
-	// TODO(sbarzowski) provide some examples
-	// TODO(sbarzowski) provide somewhere a complete explanation of the object model
-	// How deep in super we are. If we're executing
-	// TODO(sbarzowski) I was confused when I saw this name? Is it a standard term?
-	// If not maybe something along the lines of superDepth would be more obvious.
-	offset int
+	sb selfBinding
 
 	// Bindings introduced in this frame. The way previous bindings are treated
 	// depends on the type of a frame.
@@ -255,55 +113,142 @@ type environment struct {
 	upValues bindingFrame
 }
 
-func makeEnvironment(upValues bindingFrame, self value, offset int) environment {
+func makeEnvironment(upValues bindingFrame, sb selfBinding) environment {
 	return environment{
 		upValues: upValues,
-		self:     self,
-		offset:   offset,
+		sb:       sb,
 	}
+}
+
+type closure struct {
+	// base environment of a closure
+	// arguments should be added to it, before executing it
+	env      environment
+	function *astFunction
+}
+
+func makeClosure(env environment, function *astFunction) *closure {
+	return &closure{
+		env:      env,
+		function: function,
+	}
+}
+
+func (closure *closure) Parameters() identifiers {
+	return closure.function.parameters
+}
+
+func (closure *closure) EvalCall(arguments callArguments, e *evaluator) (value, error) {
+	argThunks := make(bindingFrame)
+	for i, arg := range arguments.positional {
+		argThunks[closure.function.parameters[i]] = arg
+	}
+
+	calledEnvironment := makeEnvironment(
+		addBindings(closure.env.upValues, argThunks),
+		closure.env.sb,
+	)
+	context := TraceContext{
+		Loc:  closure.function.Loc(),
+		Name: "function <anonymous>",
+	}
+	return e.evalInCleanEnv(&context, &calledEnvironment, closure.function.body)
 }
 
 type thunk struct {
-	content value // nil if not filled
-	name    identifier
-	env     environment
-	body    astNode
+	name identifier
+	env  environment
+	body astNode
 }
 
-func makeThunk(name identifier, env environment, body astNode) *thunk {
-	return &thunk{
+func makeThunk(name identifier, env environment, body astNode) *cachedThunk {
+	return makeCachedThunk(&thunk{
 		name: name,
 		env:  env,
 		body: body,
+	})
+}
+
+func (t *thunk) getValue(i *interpreter, trace *TraceElement) (value, error) {
+	context := TraceContext{
+		Loc:  t.body.Loc(),
+		Name: "thunk <" + string(t.name) + ">",
 	}
+	return i.EvalInCleanEnv(trace, &context, &t.env, t.body)
 }
 
-func (t *thunk) fill(v value) {
-	t.content = v
-	// no point in keeping the environment - we already have the value
-	t.env = environment{}
+type callThunk struct {
+	function evalCallable
+	args     callArguments
 }
 
-func (t *thunk) filled() bool {
-	return t.content != nil
+func makeCallThunk(ec evalCallable, args callArguments) *callThunk {
+	return &callThunk{function: ec, args: args}
 }
 
-func (t *thunk) getValue(i *interpreter, loc *LocationRange) (value, error) {
-	if t.filled() {
-		// TODO(sbarzowski) what for? Stack trace?
-		// We're getting out of here anyway this seems useless
-		i.stack.newCall(loc, t, t.env)
-		return t.content, nil
+func (th *callThunk) getValue(i *interpreter, trace *TraceElement) (value, error) {
+	evaluator := makeEvaluator(i, trace)
+	// TODO(sbarzowski): actually this trace is kinda useless inside...
+	return th.function.EvalCall(th.args, evaluator)
+}
+
+// TODO(sbarzowski) better name?
+// TODO(sbarzowski) force use cached/ready everywhere? perhaps an interface tag?
+// TODO(sbarzowski) investigate efficiency of various representations
+type cachedThunk struct {
+	pv potentialValue
+}
+
+func makeCachedThunk(pv potentialValue) *cachedThunk {
+	return &cachedThunk{pv}
+}
+
+func (t *cachedThunk) getValue(i *interpreter, trace *TraceElement) (value, error) {
+	v, err := t.pv.getValue(i, trace)
+	if err != nil {
+		// TODO(sbarzowski) perhaps cache errors as well
+		// may be necessary if we allow handling them in any way
+		return nil, err
 	}
-	return i.EvalInCleanEnv(loc, &t.env, t.body)
+	t.pv = &readyValue{v}
+	return v, nil
 }
 
 // The stack
 
 // TraceFrame is tracing information about a single frame of the call stack.
+// TODO(sbarzowski) the difference from TraceElement. Do we even need this?
 type TraceFrame struct {
 	Loc  LocationRange
 	Name string
+}
+
+func traceElementToTraceFrame(trace *TraceElement) TraceFrame {
+	tf := TraceFrame{Loc: *trace.loc}
+	if trace.context != nil {
+		// TODO(sbarzowski) maybe it should never be nil
+		tf.Name = trace.context.Name
+	} else {
+		tf.Name = "name" // duh
+	}
+	return tf
+}
+
+func callFrameToTraceFrame(frame *callFrame) TraceFrame {
+	return traceElementToTraceFrame(frame.trace)
+}
+
+func (i *interpreter) getCurrentStackTrace(additional *TraceElement) []TraceFrame {
+	var result []TraceFrame
+	for _, f := range i.stack.stack {
+		if f.isCall {
+			result = append(result, callFrameToTraceFrame(f))
+		}
+	}
+	if additional != nil {
+		result = append(result, traceElementToTraceFrame(additional))
+	}
+	return result
 }
 
 type callFrame struct {
@@ -312,30 +257,11 @@ type callFrame struct {
 	// This makes callFrame a misnomer as it is technically not always a call...
 	isCall bool
 
-	// The code we were executing before.
-	// TODO(sbarzowski) what is it? Before? I guess it's the place from where it's
-	// called etc.
-	// TODO(sbarzowski) how could it be nil?
-	ast astNode
-
-	// The location of the code we were executing before.
-	// location == ast->location when ast != nil
-	// TODO(sbarzowski) what if ast == nil?
-	location LocationRange // TODO what is it?
+	// Tracing information about the place where (TODO)
+	trace *TraceElement
 
 	/** Reuse this stack frame for the purpose of tail call optimization. */
 	tailCall bool // TODO what is it?
-
-	/** Used for a variety of purposes. - > ???*/
-	// TODO what is it? It's only used in dead code...
-	thunks []*thunk
-
-	/** The context is used in error messages to attempt to find a reasonable name for the
-	 * object, function, or thunk value being executed.  If it is a thunk, it is filled
-	 * with the value when the frame terminates.
-	 */
-	// TODO(sbarzowski) Why ast/location is not enough for that?
-	context interface{}
 
 	env environment
 }
@@ -343,7 +269,7 @@ type callFrame struct {
 func dumpCallFrame(c *callFrame) string {
 	return fmt.Sprintf("<callFrame isCall = %t location = %v tailCall = %t>",
 		c.isCall,
-		c.location,
+		*c.trace.loc,
 		c.tailCall,
 	)
 }
@@ -373,18 +299,16 @@ func (s *callStack) pop() {
 		s.calls--
 	}
 	s.stack = s.stack[:len(s.stack)-1]
-
 }
 
 /** If there is a tailstrict annotated frame followed by some locals, pop them all. */
 func (s *callStack) tailCallTrimStack() {
 	for i := len(s.stack) - 1; i >= 0; i-- {
 		if s.stack[i].isCall {
-			// If thunks > 0 that means we are still executing args (tailstrict).
-			if !s.stack[i].tailCall || len(s.stack[i].thunks) > 0 {
+			if !s.stack[i].tailCall { // TODO(sbarzowski) we may need to check some more stuff
 				return
 			}
-			// Remove all stack frames including this one.
+			// Remove this stack frame and everything above it
 			s.stack = s.stack[:i]
 			s.calls--
 			return
@@ -392,15 +316,16 @@ func (s *callStack) tailCallTrimStack() {
 	}
 }
 
-func (s *callStack) newCall(loc *LocationRange, context interface{}, env environment) error {
+func (i *interpreter) newCall(trace *TraceElement, env environment) error {
+	s := &i.stack
 	s.tailCallTrimStack()
 	if s.calls >= s.limit {
-		return makeRuntimeError(loc, "Max stack frames exceeded.")
+		// TODO(sbarzowski) add tracing information
+		return makeRuntimeError("Max stack frames exceeded.", i.getCurrentStackTrace(trace))
 	}
 	s.stack = append(s.stack, &callFrame{
 		isCall:   true,
-		location: *loc,
-		context:  context,
+		trace:    trace,
 		env:      env,
 		tailCall: false,
 	})
@@ -408,17 +333,18 @@ func (s *callStack) newCall(loc *LocationRange, context interface{}, env environ
 	return nil
 }
 
-func (s *callStack) newLocal(vars bindingFrame) {
+func (i *interpreter) newLocal(vars bindingFrame) {
+	s := &i.stack
 	s.stack = append(s.stack, &callFrame{
-		env: makeEnvironment(vars, nil, 0),
+		env: makeEnvironment(vars, selfBinding{}),
 	})
 }
 
 // getSelfBinding resolves the self construct
-func (s *callStack) getSelfBinding() (value, int) {
+func (s *callStack) getSelfBinding() selfBinding {
 	for i := len(s.stack) - 1; i >= 0; i-- {
 		if s.stack[i].isCall {
-			return s.stack[i].env.self, s.stack[i].env.offset
+			return s.stack[i].env.sb
 		}
 	}
 	panic(fmt.Sprintf("INTERNAL ERROR: malformed stack %v", dumpCallStack(s)))
@@ -446,7 +372,6 @@ func makeCallStack(limit int) callStack {
 	}
 }
 
-// TODO(dcunnin): Add import callbacks.
 // TODO(dcunnin): Add string output.
 // TODO(dcunnin): Add multi output.
 
@@ -456,6 +381,9 @@ type interpreter struct {
 	idArrayElement identifier // TODO what is it?
 	idInvariant    identifier // TODO what is it?
 	externalVars   vmExtMap   // TODO what is it?
+
+	initialEnv  environment
+	importCache *ImportCache
 }
 
 // Build a binding frame (closure environment) containing specified variables
@@ -463,37 +391,11 @@ func (i *interpreter) capture(freeVars identifiers) bindingFrame {
 	env := make(bindingFrame)
 	for _, fv := range freeVars {
 		env[fv] = i.stack.lookUpVar(fv)
+		if env[fv] == nil {
+			panic(fmt.Sprintf("INTERNAL ERROR: Variable %v vanished", fv))
+		}
 	}
 	return env
-}
-
-type fieldHideMap map[string]astObjectFieldHide
-
-func (i *interpreter) objectFieldsAux(obj value) fieldHideMap {
-	r := make(fieldHideMap)
-	switch obj := obj.(type) {
-	// case *valueExtendedObject:
-	// TODO(dcunnin): this
-
-	case *valueSimpleObject:
-		for fieldName, field := range obj.fields {
-			r[fieldName] = field.hide
-		}
-
-		// case *valueComprehensionObject:
-		// TODO(dcunnin): this
-	}
-	return r
-}
-
-func (i *interpreter) objectFields(obj value, manifesting bool) []string {
-	var r []string
-	for fieldName, hide := range i.objectFieldsAux(obj) {
-		if !manifesting || hide != astObjectFieldHidden {
-			r = append(r, fieldName)
-		}
-	}
-	return r
 }
 
 func addBindings(a, b bindingFrame) bindingFrame {
@@ -510,43 +412,80 @@ func addBindings(a, b bindingFrame) bindingFrame {
 	return result
 }
 
-// TODO(sbarzowski) what happens to the stack?
-func (i *interpreter) evaluate(a astNode) (value, error) {
+func (i *interpreter) getCurrentEnv(ast astNode) environment {
+	return makeEnvironment(
+		i.capture(ast.FreeVariables()),
+		i.stack.getSelfBinding(),
+	)
+}
+
+func (i *interpreter) evaluate(a astNode, context *TraceContext) (value, error) {
 	// TODO(dcunnin): All the other cases...
+
+	e := &evaluator{
+		trace: &TraceElement{
+			loc:     a.Loc(),
+			context: context,
+		},
+		i: i,
+	}
+
 	switch ast := a.(type) {
 	case *astArray:
-		self, offset := i.stack.getSelfBinding()
-		var elements []*thunk
+		sb := i.stack.getSelfBinding()
+		var elements []potentialValue
 		for _, el := range ast.elements {
-			env := makeEnvironment(i.capture(el.FreeVariables()), self, offset)
+			env := makeEnvironment(i.capture(el.FreeVariables()), sb)
 			elThunk := makeThunk(i.idArrayElement, env, el)
 			elements = append(elements, elThunk)
 		}
 		return makeValueArray(elements), nil
 
 	case *astBinary:
-		leftVal, err := i.evaluate(ast.left)
-		if err != nil {
-			return nil, err
-		}
-		rightVal, err := i.evaluate(ast.right)
-		if err != nil {
-			return nil, err
-		}
+		// Some binary operators are lazy, so thunks are needed in general
+		env := i.getCurrentEnv(ast)
+		left := makeThunk("???", env, ast.left)
+		right := makeThunk("???", env, ast.right)
 
 		builtin := bopBuiltins[ast.op]
 
-		result, err := builtin.Binary(leftVal, rightVal, i, a.Loc())
+		result, err := builtin.function(e, left, right)
 		if err != nil {
 			return nil, err
 		}
 		return result, nil
 
+	case *astUnary:
+		env := i.getCurrentEnv(ast)
+		arg := makeThunk("???", env, ast.expr)
+
+		builtin := uopBuiltins[ast.op]
+
+		result, err := builtin.function(e, arg)
+		if err != nil {
+			return nil, err
+		}
+		return result, nil
+
+	case *astConditional:
+		cond, err := e.evalInCurrentContext(ast.cond)
+		if err != nil {
+			return nil, err
+		}
+		condBool, err := e.getBoolean(cond)
+		if err != nil {
+			return nil, err
+		}
+		if condBool.value {
+			return e.evalInCurrentContext(ast.branchTrue)
+		}
+		return e.evalInCurrentContext(ast.branchFalse)
+
 	case *astDesugaredObject:
 		// Evaluate all the field names.  Check for null, dups, etc.
 		fields := make(valueSimpleObjectFieldMap)
 		for _, field := range ast.fields {
-			fieldNameValue, err := i.evaluate(field.name)
+			fieldNameValue, err := e.evalInCurrentContext(field.name)
 			if err != nil {
 				return nil, err
 			}
@@ -558,54 +497,61 @@ func (i *interpreter) evaluate(a astNode) (value, error) {
 				// Omitted field.
 				continue
 			default:
-				return nil, makeRuntimeError(ast.Loc(), "Field name was not a string.")
+				return nil, e.Error("Field name was not a string.")
 			}
 
 			if err != nil {
 				return nil, err
 			}
 			if _, ok := fields[fieldName]; ok {
-				return nil, makeRuntimeError(ast.Loc(), fmt.Sprintf("Duplicate field name: \"%s\"", fieldName))
+				return nil, e.Error(fmt.Sprintf("Duplicate field name: \"%s\"", fieldName))
 			}
-			fields[fieldName] = valueSimpleObjectField{field.hide, field.body}
+			fields[fieldName] = valueSimpleObjectField{field.hide, &codeUnboundField{field.body}}
 		}
 		upValues := i.capture(ast.FreeVariables())
 		return makeValueSimpleObject(upValues, fields, ast.asserts), nil
 
 	case *astError:
-		msgVal, err := i.evaluate(ast.expr)
+		msgVal, err := e.evalInCurrentContext(ast.expr)
 		if err != nil {
 			// error when evaluating error message
-			// TODO(sbarzowski) maybe add it to stack trace, to avoid confusion
 			return nil, err
 		}
-		// TODO(sbarzowski) handle more gracefully
-		msg := msgVal.(*valueString)
-		return nil, makeRuntimeError(&ast.loc, fmt.Sprintf("Error: %v", msg.value))
-
-	case *astIndex:
-		targetValue, err := i.evaluate(ast.target)
+		msg, err := e.getString(msgVal)
 		if err != nil {
 			return nil, err
 		}
-		index, err := i.evaluate(ast.index)
+		return nil, e.Error(msg.value)
+
+	case *astIndex:
+		targetValue, err := e.evalInCurrentContext(ast.target)
+		if err != nil {
+			return nil, err
+		}
+		index, err := e.evalInCurrentContext(ast.index)
 		if err != nil {
 			return nil, err
 		}
 		switch target := targetValue.(type) {
-		case *valueSimpleObject:
+		case valueObject:
 			indexString := index.(*valueString).value
-			v, err := objectIndex(&ast.loc, target, indexString, 0) // why offset = 0?
-			if err != nil {
-				return nil, err
-			}
-			return v.getValue(i, &ast.loc)
+			return target.index(e, indexString)
 		case *valueArray:
 			indexInt := int(index.(*valueNumber).value)
-			return target.elements[indexInt].getValue(i, &ast.loc)
+			return e.evaluate(target.elements[indexInt])
 		}
 
-		return nil, makeRuntimeError(ast.Loc(), fmt.Sprintf("Value non indexable: %v", reflect.TypeOf(targetValue)))
+		return nil, e.Error(fmt.Sprintf("Value non indexable: %v", reflect.TypeOf(targetValue)))
+
+	case *astImport:
+		// TODO(sbarzowski) put this information in AST instead of getting it out of tracing data...
+		codeDir := path.Dir(e.trace.loc.FileName)
+		return i.importCache.ImportCode(codeDir, ast.file, e)
+
+	case *astImportStr:
+		// TODO(sbarzowski) put this information in AST instead of getting it out of tracing data...
+		codeDir := path.Dir(e.trace.loc.FileName)
+		return i.importCache.ImportString(codeDir, ast.file)
 
 	case *astLiteralBoolean:
 		return makeValueBoolean(ast.value), nil
@@ -621,69 +567,68 @@ func (i *interpreter) evaluate(a astNode) (value, error) {
 
 	case *astLocal:
 		vars := make(bindingFrame)
-		self, offset := i.stack.getSelfBinding()
+		bindEnv := i.getCurrentEnv(a)
+		// TODO(sbarzowski) recursive locals
 		for _, bind := range ast.binds {
-			upValues := i.capture(bind.body.FreeVariables())
-			env := makeEnvironment(upValues, self, offset)
-			th := makeThunk(bind.variable, env, bind.body)
+			th := makeThunk(bind.variable, bindEnv, bind.body)
 			vars[bind.variable] = th
+			bindEnv.upValues[bind.variable] = th
 		}
-		i.stack.newLocal(vars)
+		i.newLocal(vars)
 		// Add new stack frame, with new thunk for this variable
 		// execute body WRT stack frame.
-		return i.evaluate(ast.body)
+		v, err := e.evalInCurrentContext(ast.body)
+		i.stack.pop()
+		return v, err
+
+	case *astSelf:
+		sb := i.stack.getSelfBinding()
+		return sb.self, nil
 
 	case *astVar:
-		th := i.stack.lookUpVar(ast.id)
-		if th == nil {
-			//fmt.Println(dumpCallStack(&i.stack))
-			// This, should be caught during static check, right?
-			return nil, makeRuntimeError(ast.Loc(), fmt.Sprintf("Unknown variable: %v", ast.id))
-		}
-		return th.getValue(i, &ast.loc)
+		return e.evaluate(e.lookUpVar(ast.id))
 
-	case *astFunction:
-		bf := i.capture(ast.FreeVariables())
-		return makeValueClosure(bf, ast), nil
-
-	case *astApply:
-		// Eval target
-		target, err := i.evaluate(ast.target)
+	case *astSuperIndex:
+		index, err := e.evalInCurrentContext(ast.index)
 		if err != nil {
 			return nil, err
 		}
-		closure := target.(*valueClosure) // TODO(sbarzowski) check gracefully
+		indexStr, err := e.getString(index)
+		if err != nil {
+			return nil, err
+		}
+		return superIndex(e, i.stack.getSelfBinding(), indexStr.value)
 
-		// Prepare argument thunks
+	case *astFunction:
+		return &valueFunction{
+			ec: makeClosure(i.getCurrentEnv(a), ast),
+		}, nil
 
-		self, offset := i.stack.getSelfBinding()
-
-		// environment in which we can evaluate arguments
-		argEnv := makeEnvironment(
-			i.capture(ast.FreeVariables()),
-			self,
-			offset,
-		)
-
-		argThunks := make(bindingFrame)
-		for index, arg := range ast.arguments {
-			paramName := closure.function.parameters[index]
-			argThunks[paramName] = makeThunk("???", argEnv, arg)
+	case *astApply:
+		// Eval target
+		target, err := e.evalInCurrentContext(ast.target)
+		if err != nil {
+			return nil, err
+		}
+		function, err := e.getFunction(target)
+		if err != nil {
+			return nil, err
 		}
 
-		// Variables visible inside the called function
-		// There will be:
-		// * Variables captured by the closure
-		// *
-		calledEnvironment := makeEnvironment(
-			addBindings(closure.upValues, argThunks),
-			closure.self,
-			closure.offset,
-		)
+		// environment in which we can evaluate arguments
+		argEnv := i.getCurrentEnv(a)
 
-		return i.EvalInCleanEnv(&ast.loc, &calledEnvironment, closure.function.body)
+		arguments := callArguments{
+			positional: make([]potentialValue, len(ast.arguments)),
+		}
+		for i, arg := range ast.arguments {
+			arguments.positional[i] = makeThunk("???", argEnv, arg)
+		}
+
+		return e.evaluate(function.call(arguments))
+
 	default:
-		return nil, makeRuntimeError(ast.Loc(), fmt.Sprintf("Executing this AST type not implemented yet: %v", reflect.TypeOf(a)))
+		return nil, e.Error(fmt.Sprintf("Executing this AST type not implemented yet: %v", reflect.TypeOf(a)))
 	}
 }
 
@@ -732,10 +677,12 @@ func unparseNumber(v float64) string {
 	return fmt.Sprintf("%.17g", v)
 }
 
-// TODO(sbarzowski) What is this loc? It's apparently used for error reporting, but what's the idea?
-// It looks like it tries to get the location of the "origin" of the value.
-func (i *interpreter) manifestJSON(loc *LocationRange, v value, multiline bool, indent string, buf *bytes.Buffer) error {
+// TODO(sbarzowski) Perhaps it should be a builtin?
+// TODO(sbarzowski) Perhaps we should separate recursive evaluation from serialization?
+// 					Strictly evaluating something may be useful by itself.
+func (i *interpreter) manifestJSON(trace *TraceElement, v value, multiline bool, indent string, buf *bytes.Buffer) error {
 	// TODO(dcunnin): All the other types...
+	e := &evaluator{i: i, trace: trace}
 	switch v := v.(type) {
 	case *valueArray:
 		if len(v.elements) == 0 {
@@ -751,17 +698,16 @@ func (i *interpreter) manifestJSON(loc *LocationRange, v value, multiline bool, 
 				indent2 = indent
 			}
 			for _, th := range v.elements {
-				tloc := loc
-				if th.body != nil {
-					tloc = th.body.Loc()
-				}
-				elVal, err := th.getValue(i, tloc) // TODO(sbarzowski) perhaps manifestJSON should just take potentialValue
+				// if th.body != nil {
+				// 	tloc = th.body.Loc()
+				// }
+				elVal, err := th.getValue(i, trace) // TODO(sbarzowski) perhaps manifestJSON should just take potentialValue
 				if err != nil {
 					return err
 				}
 				buf.WriteString(prefix)
 				buf.WriteString(indent2)
-				err = i.manifestJSON(tloc, elVal, multiline, indent2, buf)
+				err = i.manifestJSON(trace, elVal, multiline, indent2, buf)
 				if err != nil {
 					return err
 				}
@@ -785,8 +731,8 @@ func (i *interpreter) manifestJSON(loc *LocationRange, v value, multiline bool, 
 			buf.WriteString("false")
 		}
 
-	case *valueClosure:
-		return makeRuntimeError(loc, "Couldn't manifest function in JSON output.")
+	case *valueFunction:
+		return makeRuntimeError("Couldn't manifest function in JSON output.", i.getCurrentStackTrace(trace))
 
 	case *valueNumber:
 		buf.WriteString(unparseNumber(v.value))
@@ -794,11 +740,10 @@ func (i *interpreter) manifestJSON(loc *LocationRange, v value, multiline bool, 
 	case *valueNull:
 		buf.WriteString("null")
 
-	// TODO(dcunnin): Other types representing objects will be handled by the same code here.
-	case *valueSimpleObject:
+	case valueObject:
 		// TODO(dcunnin): Run invariants (object-level assertions).
 
-		fieldNames := i.objectFields(v, true)
+		fieldNames := objectFields(v, true)
 		sort.Strings(fieldNames)
 
 		if len(fieldNames) == 0 {
@@ -814,13 +759,7 @@ func (i *interpreter) manifestJSON(loc *LocationRange, v value, multiline bool, 
 				indent2 = indent
 			}
 			for _, fieldName := range fieldNames {
-
-				fieldPotentialVal, err := objectIndex(loc, v, fieldName, 0)
-				if err != nil {
-					return err
-				}
-
-				fieldVal, err := fieldPotentialVal.getValue(i, loc)
+				fieldVal, err := v.index(e, fieldName)
 				if err != nil {
 					return err
 				}
@@ -833,8 +772,8 @@ func (i *interpreter) manifestJSON(loc *LocationRange, v value, multiline bool, 
 				buf.WriteString("\"")
 				buf.WriteString(": ")
 
-				// TODO body.Loc()
-				err = i.manifestJSON(loc, fieldVal, multiline, indent2, buf)
+				// TODO(sbarzowski) body.Loc()
+				err = i.manifestJSON(trace, fieldVal, multiline, indent2, buf)
 				if err != nil {
 					return err
 				}
@@ -857,41 +796,112 @@ func (i *interpreter) manifestJSON(loc *LocationRange, v value, multiline bool, 
 		buf.WriteString(unparseString(v.value))
 
 	default:
-		return makeRuntimeError(loc, fmt.Sprintf("Manifesting this value not implemented yet: %s", reflect.TypeOf(v)))
+		return makeRuntimeError(
+			fmt.Sprintf("Manifesting this value not implemented yet: %s", reflect.TypeOf(v)),
+			i.getCurrentStackTrace(trace),
+		)
 
 	}
 	return nil
 }
 
-func (i *interpreter) EvalInCleanEnv(fromWhere *LocationRange, env *environment, ast astNode) (value, error) {
-	// TODO(sbarzowski) Figure out if this context arg (nil here) is needed for anything
-	i.stack.newCall(fromWhere, nil, *env)
-	val, err := i.evaluate(ast)
+func (i *interpreter) EvalInCleanEnv(fromWhere *TraceElement, newContext *TraceContext,
+	env *environment, ast astNode) (value, error) {
+	err := i.newCall(fromWhere, *env)
+	if err != nil {
+		return nil, err
+	}
+	val, err := i.evaluate(ast, newContext)
 	i.stack.pop()
 	return val, err
 }
 
-func evaluate(ast astNode, ext vmExtMap, maxStack int) (string, error) {
+func buildStdObject(i *interpreter) (value, error) {
+	objVal, err := evaluateStd(i)
+	if err != nil {
+		return nil, err
+	}
+	obj := objVal.(*valueSimpleObject)
+	builtinFields := map[string]unboundField{
+		// TODO(sbarzowski) not a real thing, just the simples thing I could put there
+		"nullValue": &readyValue{&valueNull{}},
+	}
+	for key, ec := range funcBuiltins {
+		function := valueFunction{ec: ec} // TODO(sbarzowski) better way to build function value
+		builtinFields[key] = &readyValue{&function}
+	}
+
+	for name, value := range builtinFields {
+		obj.fields[name] = valueSimpleObjectField{astObjectFieldHidden, value}
+	}
+	return obj, nil
+}
+
+func evaluateStd(i *interpreter) (value, error) {
+	beforeStdEnv := makeEnvironment(
+		bindingFrame{},
+		selfBinding{
+			nil,
+			123456789, // poison value
+		},
+	)
+	evalLoc := makeLocationRangeMessage("During evaluation of std")
+	evalTrace := &TraceElement{loc: &evalLoc}
+	ast, err := snippetToAST("std.jsonnet", getStdCode())
+	if err != nil {
+		return nil, err
+	}
+	context := TraceContext{Name: "<stdlib>"}
+	return i.EvalInCleanEnv(evalTrace, &context, &beforeStdEnv, ast)
+}
+
+func buildInterpreter(ext vmExtMap, maxStack int, importer Importer) (*interpreter, error) {
 	i := interpreter{
 		stack:          makeCallStack(maxStack),
 		idArrayElement: identifier("array_element"),
 		idInvariant:    identifier("object_assert"),
 		externalVars:   ext,
+
+		importCache: MakeImportCache(importer),
 	}
-	// TODO(sbarzowski) include extVars in this newCall
-	initialEnv := makeEnvironment(
-		bindingFrame{},
-		nil,
-		123456789, // poison value
+
+	stdObj, err := buildStdObject(&i)
+	if err != nil {
+		return nil, err
+	}
+
+	i.initialEnv = makeEnvironment(
+		bindingFrame{
+			"std": &readyValue{stdObj},
+		},
+		selfBinding{
+			nil,
+			123456789, // poison value
+		},
 	)
+	return &i, nil
+}
+
+func evaluate(ast astNode, ext vmExtMap, maxStack int, importer Importer) (string, error) {
+	i, err := buildInterpreter(ext, maxStack, importer)
+	if err != nil {
+		return "", err
+	}
 	evalLoc := makeLocationRangeMessage("During evaluation")
-	result, err := i.EvalInCleanEnv(&evalLoc, &initialEnv, ast)
+	evalTrace := &TraceElement{
+		loc: &evalLoc,
+	}
+	context := TraceContext{Loc: ast.Loc(), Name: "<main>"}
+	result, err := i.EvalInCleanEnv(evalTrace, &context, &i.initialEnv, ast)
 	if err != nil {
 		return "", err
 	}
 	var buffer bytes.Buffer
-	loc := makeLocationRangeMessage("During manifestation")
-	err = i.manifestJSON(&loc, result, true, "", &buffer)
+	manifestationLoc := makeLocationRangeMessage("During manifestation")
+	manifestationTrace := &TraceElement{
+		loc: &manifestationLoc,
+	}
+	err = i.manifestJSON(manifestationTrace, result, true, "", &buffer)
 	if err != nil {
 		return "", err
 	}

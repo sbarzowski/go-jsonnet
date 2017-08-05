@@ -16,60 +16,76 @@ limitations under the License.
 
 package jsonnet
 
-// Note: There are no garbage collection params because we're using the native
-// Go garbage collector.
+import (
+	"fmt"
+	"io/ioutil"
+	"os"
+	"path"
+)
 
-// VM is the core interpreter and is the touchpoint used to parse and execute
-// Jsonnet.
-type VM struct {
-	MaxStack int
-	MaxTrace int // The number of lines of stack trace to display (0 for all of them).
-	ext      vmExtMap
+type FileImporter struct {
+	// TODO(sbarzowski) fill it in
+	JPaths []string
 }
 
-// MakeVM creates a new VM with default parameters.
-func MakeVM() *VM {
-	return &VM{
-		MaxStack: 500,
-		MaxTrace: 20,
+func tryPath(dir, importedPath string) (found bool, content []byte, foundHere string, err error) {
+	var absPath string
+	if path.IsAbs(importedPath) {
+		absPath = importedPath
+	} else {
+		absPath = path.Join(dir, importedPath)
 	}
+	content, err = ioutil.ReadFile(absPath)
+	if os.IsNotExist(err) {
+		return false, nil, "", nil
+	}
+	return true, content, absPath, err
 }
 
-// ExtVar binds a Jsonnet external var to the given value.
-func (vm *VM) ExtVar(key string, val string) {
-	vm.ext[key] = vmExt{value: val, isCode: false}
+func (importer *FileImporter) Import(dir, importedPath string) (*ImportedData, error) {
+	found, content, foundHere, err := tryPath(dir, importedPath)
+	if err != nil {
+		return nil, err
+	}
+
+	for i := 0; !found && i < len(importer.JPaths); i++ {
+		found, content, foundHere, err = tryPath(importer.JPaths[i], importedPath)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return &ImportedData{content: string(content), foundHere: foundHere}, nil
 }
 
-// ExtCode binds a Jsonnet external code var to the given value.
-func (vm *VM) ExtCode(key string, val string) {
-	vm.ext[key] = vmExt{value: val, isCode: true}
+type MemoryImporter struct {
+	data map[string]string
 }
 
-// EvaluateSnippet evaluates a string containing Jsonnet code, return a JSON
-// string.
-//
-// The filename parameter is only used for error messages.
-func (vm *VM) EvaluateSnippet(filename string, snippet string) (string, error) {
+func (importer *MemoryImporter) Import(dir, importedPath string) (*ImportedData, error) {
+	if content, ok := importer.data[importedPath]; ok {
+		return &ImportedData{content: content, foundHere: importedPath}, nil
+	}
+	return nil, fmt.Errorf("Import not available %v", importedPath)
+}
+
+func snippetToAST(filename string, snippet string) (astNode, error) {
 	tokens, err := lex(filename, snippet)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	ast, err := parse(tokens)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	// fmt.Println(ast.(dumpable).dump())
 	err = desugarFile(&ast)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	err = analyze(ast)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	output, err := evaluate(ast, vm.ext, vm.MaxStack)
-	if err != nil {
-		return "", err
-	}
-	return output, nil
+	return ast, nil
 }

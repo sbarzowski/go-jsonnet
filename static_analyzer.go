@@ -16,7 +16,9 @@ limitations under the License.
 
 package jsonnet
 
-import "fmt"
+import (
+	"fmt"
+)
 
 func (i *identifierSet) append(idents identifiers) {
 	for _, ident := range idents {
@@ -37,8 +39,6 @@ func visitNext(a astNode, inObject bool, vars identifierSet, state *analysisStat
 	state.freeVars.append(a.FreeVariables())
 }
 
-// TODO(dcunnin): Check for invalid use of self, super, and bound variables.
-// TODO(dcunnin): Compute free variables at each AST.
 func analyzeVisit(a astNode, inObject bool, vars identifierSet) error {
 	s := &analysisState{freeVars: NewidentifierSet()}
 
@@ -46,6 +46,9 @@ func analyzeVisit(a astNode, inObject bool, vars identifierSet) error {
 	switch ast := a.(type) {
 	case *astApply:
 		visitNext(ast.target, inObject, vars, s)
+		for _, arg := range ast.arguments {
+			visitNext(arg, inObject, vars, s)
+		}
 	case *astArray:
 		for _, elem := range ast.elements {
 			visitNext(elem, inObject, vars, s)
@@ -53,8 +56,6 @@ func analyzeVisit(a astNode, inObject bool, vars identifierSet) error {
 	case *astBinary:
 		visitNext(ast.left, inObject, vars, s)
 		visitNext(ast.right, inObject, vars, s)
-	case *astBuiltin:
-		// nothing to do here
 	case *astConditional:
 		visitNext(ast.cond, inObject, vars, s)
 		visitNext(ast.branchTrue, inObject, vars, s)
@@ -64,7 +65,15 @@ func analyzeVisit(a astNode, inObject bool, vars identifierSet) error {
 	case *astFunction:
 		// TODO(sbarzowski) check duplicate function parameters
 		// or maybe somewhere else as it doesn't require any context
-		visitNext(ast.body, inObject, vars, s)
+		newVars := vars.Clone()
+		for _, param := range ast.parameters {
+			newVars.Add(param)
+		}
+		visitNext(ast.body, inObject, newVars, s)
+		// Parameters are free inside the body, but not visible here or outside
+		for _, param := range ast.parameters {
+			s.freeVars.Remove(param)
+		}
 		// TODO(sbarzowski) when we have default values of params check them
 	case *astImport:
 		//nothing to do here
@@ -129,10 +138,9 @@ func analyzeVisit(a astNode, inObject bool, vars identifierSet) error {
 		panic(fmt.Sprintf("Unexpected node %#v", a))
 	}
 	a.setFreeVariables(s.freeVars.ToSlice())
-
-	return nil
+	return s.err
 }
 
 func analyze(ast astNode) error {
-	return analyzeVisit(ast, false, NewidentifierSet())
+	return analyzeVisit(ast, false, NewidentifierSet("std"))
 }

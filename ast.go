@@ -230,18 +230,6 @@ type astBinary struct {
 
 // ---------------------------------------------------------------------------
 
-// astBuiltin represents built-in functions.
-//
-// There is no parse rule to build this AST.  Instead, it is used to build the
-// std object in the interpreter.
-type astBuiltin struct {
-	astNodeBase
-	id     int
-	params identifiers
-}
-
-// ---------------------------------------------------------------------------
-
 // astConditional represents if/then/else.
 //
 // After parsing, branchFalse can be nil indicating that no else branch
@@ -303,7 +291,6 @@ type astIndex struct {
 	target astNode
 	index  astNode
 	id     *identifier
-	// TODO(sbarzowski): slice support (perhaps separate types?)
 }
 
 type astSlice struct {
