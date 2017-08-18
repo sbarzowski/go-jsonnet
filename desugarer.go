@@ -140,11 +140,11 @@ func desugarFields(location LocationRange, fields *astObjectFields, objLevel int
 		function := &astFunction{
 			// TODO(sbarzowski) better location
 			astNodeBase: astNodeBase{loc: *origBody.Loc()},
-			parameters:  field.ids,
+			parameters:  *field.params,
 			body:        origBody,
 		}
 		field.methodSugar = false
-		field.ids = nil
+		field.params = nil
 		field.expr2 = function
 	}
 
@@ -237,7 +237,7 @@ func buildStdCall(builtinName identifier, args ...astNode) astNode {
 	builtin := buildSimpleIndex(std, builtinName)
 	return &astApply{
 		target:    builtin,
-		arguments: args,
+		arguments: &astArguments{positional: args},
 	}
 }
 
@@ -259,8 +259,14 @@ func desugar(astPtr *astNode, objLevel int) (err error) {
 	switch ast := ast.(type) {
 	case *astApply:
 		desugar(&ast.target, objLevel)
-		for i := range ast.arguments {
-			err = desugar(&ast.arguments[i], objLevel)
+		for i := range ast.arguments.positional {
+			err = desugar(&ast.arguments.positional[i], objLevel)
+			if err != nil {
+				return
+			}
+		}
+		for i := range ast.arguments.named {
+			err = desugar(&ast.arguments.named[i].arg, objLevel)
 			if err != nil {
 				return
 			}
@@ -393,7 +399,7 @@ func desugar(astPtr *astNode, objLevel int) (err error) {
 				function := &astFunction{
 					// TODO(sbarzowski) better location
 					astNodeBase: astNodeBase{loc: *origBody.Loc()},
-					parameters:  ast.binds[i].params,
+					parameters:  *ast.binds[i].params,
 					body:        origBody,
 				}
 				ast.binds[i] = astLocalBind{

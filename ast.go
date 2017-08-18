@@ -74,9 +74,19 @@ type astCompSpecs []astCompSpec
 type astApply struct {
 	astNodeBase
 	target        astNode
-	arguments     astNodes
+	arguments     *astArguments
 	trailingComma bool
 	tailStrict    bool
+}
+
+type astNamedArgument struct {
+	name identifier
+	arg  astNode
+}
+
+type astArguments struct {
+	positional astNodes
+	named      []astNamedArgument
 }
 
 // ---------------------------------------------------------------------------
@@ -264,9 +274,19 @@ type astError struct {
 // astFunction represents a function call. (jbeda: or is it function defn?)
 type astFunction struct {
 	astNodeBase
-	parameters    identifiers
+	parameters    astParameters
 	trailingComma bool
 	body          astNode
+}
+
+type astNamedParameter struct {
+	name       identifier
+	defaultArg astNode
+}
+
+type astParameters struct {
+	positional identifiers
+	named      []astNamedParameter
 }
 
 // ---------------------------------------------------------------------------
@@ -315,7 +335,7 @@ type astLocalBind struct {
 	variable      identifier
 	body          astNode
 	functionSugar bool
-	params        identifiers // if functionSugar is true
+	params        *astParameters // if functionSugar is true
 	trailingComma bool
 }
 type astLocalBinds []astLocalBind
@@ -400,19 +420,19 @@ type astObjectField struct {
 	methodSugar   bool               // f(x, y, z): ...  (ignore if kind  == astObjectAssert)
 	expr1         astNode            // Not in scope of the object
 	id            *identifier
-	ids           identifiers // If methodSugar == true then holds the params.
-	trailingComma bool        // If methodSugar == true then remembers the trailing comma
-	expr2, expr3  astNode     // In scope of the object (can see self).
+	params        *astParameters // If methodSugar == true then holds the params.
+	trailingComma bool           // If methodSugar == true then remembers the trailing comma
+	expr2, expr3  astNode        // In scope of the object (can see self).
 }
 
 // TODO(jbeda): Add the remaining constructor helpers here
 
-func astObjectFieldLocal(methodSugar bool, id *identifier, ids identifiers, trailingComma bool, body astNode) astObjectField {
-	return astObjectField{astObjectLocal, astObjectFieldVisible, false, methodSugar, nil, id, ids, trailingComma, body, nil}
+func astObjectFieldLocal(methodSugar bool, id *identifier, params *astParameters, trailingComma bool, body astNode) astObjectField {
+	return astObjectField{astObjectLocal, astObjectFieldVisible, false, methodSugar, nil, id, params, trailingComma, body, nil}
 }
 
 func astObjectFieldLocalNoMethod(id *identifier, body astNode) astObjectField {
-	return astObjectField{astObjectLocal, astObjectFieldVisible, false, false, nil, id, identifiers{}, false, body, nil}
+	return astObjectField{astObjectLocal, astObjectFieldVisible, false, false, nil, id, nil, false, body, nil}
 }
 
 type astObjectFields []astObjectField

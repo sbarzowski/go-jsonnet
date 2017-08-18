@@ -84,6 +84,8 @@ var tests = []string{
 	`if n > 1 then 'foos' else 'foo'`,
 
 	`local foo = function(x) x + 1; true`,
+	`local foo = function(x=5) x + 1; true`,
+	`local foo = function(x=5) x + 1; x(x=3)`,
 
 	`import 'foo.jsonnet'`,
 	`importstr 'foo.text'`,
