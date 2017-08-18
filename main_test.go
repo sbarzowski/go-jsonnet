@@ -49,6 +49,8 @@ var mainTests = []mainTest{
 	{"verbatim_string", `@"blah ☺"`, `"blah ☺"`, ""},
 	{"empty_array", "[]", "[ ]", ""},
 	{"array", "[1, 2, 1 + 2]", "[ 1, 2, 3 ]", ""},
+	{"assert", `assert true; true`, "true", ""},
+	{"assert", `assert false; true`, "", "RUNTIME ERROR: Assertion failed"},
 	{"empty_object", "{}", "{ }", ""},
 	{"object", `{"x": 1+1}`, `{ "x": 2 }`, ""},
 
