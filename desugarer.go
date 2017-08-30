@@ -196,15 +196,16 @@ func desugarFields(location ast.LocationRange, fields *ast.ObjectFields, objLeve
 
 	// Remove +:
 	// TODO(dcunnin): this
-	for _, field := range *fields {
+	for i, field := range *fields {
 		if !field.SuperSugar {
 			continue
 		}
-		/*
-			AST *super_f = alloc->make<SuperIndex>(field.expr1->location, field.expr1, nil)
-			field.expr2 = alloc->make<ast.Binary>(ast->location, super_f, BOP_PLUS, field.expr2)
-			field.superSugar = false
-		*/
+		si := &ast.SuperIndex{
+			Index: field.Expr1,
+		}
+		newFieldExpr := &ast.Binary{Op: ast.BopPlus, Left: si, Right: field.Expr2}
+		(*fields)[i].Expr2 = newFieldExpr
+		// TODO(sbarzowski) if for checking if the field exists in super
 	}
 
 	return nil
@@ -228,6 +229,10 @@ func desugarObjectComp(astComp *ast.ObjectComp, objLevel int) (ast.Node, error) 
 	// TODO(sbarzowski) this
 }
 
+// TODO(sbarzowski) what should we put as location of these objects?
+// I suppose the location of the thing we substitute...
+// We need to be careful to have the right thing show up, without duplication
+// or weirdness in the stack trace.
 func buildLiteralString(value string) ast.Node {
 	return &ast.LiteralString{
 		Kind:  ast.StringDouble,

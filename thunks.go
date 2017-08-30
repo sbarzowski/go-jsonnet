@@ -63,7 +63,8 @@ func makeThunk(name ast.Identifier, env environment, body ast.Node) *cachedThunk
 
 func (t *thunk) getValue(i *interpreter, trace *TraceElement) (value, error) {
 	context := TraceContext{
-		Name: "thunk <" + string(t.name) + ">",
+		Name:         "thunk <" + string(t.name) + ">",
+		LastBindName: &t.name,
 	}
 	return i.EvalInCleanEnv(trace, &context, &t.env, t.body)
 }
@@ -133,7 +134,15 @@ type codeUnboundField struct {
 
 func (f *codeUnboundField) bindToObject(sb selfBinding, origBinding bindingFrame) potentialValue {
 	// TODO(sbarzowski) better object names (perhaps include a field name too?)
-	return makeThunk("object_field", makeEnvironment(origBinding, sb), f.body)
+	nameIdent := sb.self.getName()
+	var objName ast.Identifier
+	if nameIdent != nil {
+		objName = *nameIdent
+	}
+	if objName == "" {
+		objName = "anonymous"
+	}
+	return makeThunk("object <"+objName+"> field", makeEnvironment(origBinding, sb), f.body)
 }
 
 // evalCallables
@@ -144,6 +153,7 @@ type closure struct {
 	// arguments should be added to it, before executing it
 	env      environment
 	function *ast.Function
+	name     *ast.Identifier
 }
 
 func (closure *closure) EvalCall(arguments callArguments, e *evaluator) (value, error) {
@@ -157,8 +167,16 @@ func (closure *closure) EvalCall(arguments callArguments, e *evaluator) (value, 
 		closure.env.sb,
 	)
 	// TODO(sbarzowski) better function names
+	var funcname ast.Identifier
+	if closure.name != nil {
+		funcname = *closure.name
+	}
+	if funcname == "" {
+		// TODO(sbarzowski) this is in undistinguishable from local anonymous() = ...
+		funcname = "anonymous"
+	}
 	context := TraceContext{
-		Name: "function <anonymous>",
+		Name: string("function <" + funcname + ">"),
 	}
 	return e.evalInCleanEnv(&context, &calledEnvironment, closure.function.Body)
 }
@@ -167,8 +185,9 @@ func (closure *closure) Parameters() ast.Identifiers {
 	return closure.function.Parameters
 }
 
-func makeClosure(env environment, function *ast.Function) *closure {
+func makeClosure(env environment, function *ast.Function, name *ast.Identifier) *closure {
 	return &closure{
+		name:     name,
 		env:      env,
 		function: function,
 	}

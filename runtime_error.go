@@ -58,6 +58,12 @@ func traceElementToTraceFrame(trace *TraceElement) TraceFrame {
 type TraceContext struct {
 	// Human readable name - e.g. function <foo>
 	Name string
+	// If we are in bind body, this is the name of the current bind.
+	// This helps us assign a name to a function/object.
+	// Example:
+	// local foo = function(x) 42
+	// LastBindName is foo in `function(x) 42` expression.
+	LastBindName *ast.Identifier
 }
 
 // TODO(sbarzowski) better name
