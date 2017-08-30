@@ -61,11 +61,11 @@ func makeUnexpectedError(t *token, while string) error {
 }
 
 func locFromTokens(begin, end *token) ast.LocationRange {
-	return ast.MakeLocationRange(begin.loc.FileName, begin.loc.Begin, end.loc.End)
+	return ast.LocationRangeBetween(&begin.loc, &end.loc)
 }
 
 func locFromTokenAST(begin *token, end ast.Node) ast.LocationRange {
-	return ast.MakeLocationRange(begin.loc.FileName, begin.loc.Begin, end.Loc().End)
+	return ast.LocationRangeBetween(&begin.loc, end.Loc())
 }
 
 // ---------------------------------------------------------------------------

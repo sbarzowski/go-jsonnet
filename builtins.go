@@ -56,7 +56,7 @@ func builtinPlus(e *evaluator, xp, yp potentialValue) (value, error) {
 		if err != nil {
 			return nil, err
 		}
-		return makeValueExtendedObject(left, right), nil
+		return makeValueExtendedObject(left, right, e.trace.context.LastBindName), nil
 	default:
 		return nil, e.typeErrorGeneral(x)
 	}

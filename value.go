@@ -258,6 +258,7 @@ type valueObject interface {
 	value
 	inheritanceSize() int
 	index(e *evaluator, field string) (value, error)
+	getName() *ast.Identifier
 }
 
 type selfBinding struct {
@@ -265,7 +266,7 @@ type selfBinding struct {
 	// that this is not the same as context, because we could be inside a function,
 	// inside an object and then context would be the function, but self would still point
 	// to the object.
-	self value
+	self valueObject
 
 	// superDepth is the "super" level of self.  Sometimes, we look upwards in the
 	// inheritance tree, e.g. via an explicit use of super, or because a given field
@@ -288,6 +289,11 @@ func makeUnboundSelfBinding() selfBinding {
 
 type valueObjectBase struct {
 	valueBase
+	name *ast.Identifier
+}
+
+func (obj *valueObjectBase) getName() *ast.Identifier {
+	return obj.name
 }
 
 func (*valueObjectBase) typename() string {
@@ -317,11 +323,12 @@ func (*valueSimpleObject) inheritanceSize() int {
 	return 1
 }
 
-func makeValueSimpleObject(b bindingFrame, fields valueSimpleObjectFieldMap, asserts ast.Nodes) *valueSimpleObject {
+func makeValueSimpleObject(b bindingFrame, fields valueSimpleObjectFieldMap, asserts ast.Nodes, name *ast.Identifier) *valueSimpleObject {
 	return &valueSimpleObject{
-		upValues: b,
-		fields:   fields,
-		asserts:  asserts,
+		valueObjectBase: valueObjectBase{name: name},
+		upValues:        b,
+		fields:          fields,
+		asserts:         asserts,
 	}
 }
 
@@ -372,8 +379,9 @@ func (o *valueExtendedObject) inheritanceSize() int {
 	return o.totalInheritanceSize
 }
 
-func makeValueExtendedObject(left, right valueObject) *valueExtendedObject {
+func makeValueExtendedObject(left, right valueObject, name *ast.Identifier) *valueExtendedObject {
 	return &valueExtendedObject{
+		valueObjectBase:      valueObjectBase{name: name},
 		left:                 left,
 		right:                right,
 		totalInheritanceSize: left.inheritanceSize() + right.inheritanceSize(),

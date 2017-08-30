@@ -71,7 +71,7 @@ type callFrame struct {
 	// This makes callFrame a misnomer as it is technically not always a call...
 	isCall bool
 
-	// Tracing information about the place where (TODO)
+	// Tracing information about the place where it
 	trace *TraceElement
 
 	/** Reuse this stack frame for the purpose of tail call optimization. */
@@ -327,7 +327,7 @@ func (i *interpreter) evaluate(a ast.Node, context *TraceContext) (value, error)
 			fields[fieldName] = valueSimpleObjectField{field.Hide, &codeUnboundField{field.Body}}
 		}
 		upValues := i.capture(ast.FreeVariables())
-		return makeValueSimpleObject(upValues, fields, ast.Asserts), nil
+		return makeValueSimpleObject(upValues, fields, ast.Asserts, e.trace.context.LastBindName), nil
 
 	case *ast.Error:
 		msgVal, err := e.evalInCurrentContext(ast.Expr)
@@ -424,7 +424,7 @@ func (i *interpreter) evaluate(a ast.Node, context *TraceContext) (value, error)
 
 	case *ast.Function:
 		return &valueFunction{
-			ec: makeClosure(i.getCurrentEnv(a), ast),
+			ec: makeClosure(i.getCurrentEnv(a), ast, e.trace.context.LastBindName),
 		}, nil
 
 	case *ast.Apply:
@@ -669,7 +669,11 @@ func evaluateStd(i *interpreter) (value, error) {
 	if err != nil {
 		return nil, err
 	}
-	context := TraceContext{Name: "<stdlib>"}
+	stdIdentifier := ast.Identifier("std")
+	context := TraceContext{
+		Name:         "<stdlib>",
+		LastBindName: &stdIdentifier,
+	}
 	return i.EvalInCleanEnv(evalTrace, &context, &beforeStdEnv, node)
 }
 

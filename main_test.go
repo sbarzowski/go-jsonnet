@@ -175,10 +175,10 @@ var minimalErrorTests = []errorFormattingTest{
 	{"error_in_func", `local x(n) = if n == 0 then error "x" else x(n - 1); x(3)`, "RUNTIME ERROR: x\n" +
 		"	During evaluation	\n" +
 		"	error_in_func:1:54-58	<main>\n" +
-		"	error_in_func:1:44-52	function <anonymous>\n" +
-		"	error_in_func:1:44-52	function <anonymous>\n" +
-		"	error_in_func:1:44-52	function <anonymous>\n" +
-		"	error_in_func:1:29-37	function <anonymous>\n" +
+		"	error_in_func:1:44-52	function <x>\n" +
+		"	error_in_func:1:44-52	function <x>\n" +
+		"	error_in_func:1:44-52	function <x>\n" +
+		"	error_in_func:1:29-37	function <x>\n" +
 		""},
 	{"error_in_error", `error (error "x")`, "RUNTIME ERROR: x\n" +
 		"	During evaluation	\n" +
@@ -192,3 +192,6 @@ func TestMinimalError(t *testing.T) {
 		return formatter.format(r)
 	})
 }
+
+// TODO(sbarzowski) test pretty errors once they are stable-ish
+// probably "golden" pattern is the right one for that
