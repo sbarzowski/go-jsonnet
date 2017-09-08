@@ -31,9 +31,11 @@ type Identifiers []Identifier
 // ---------------------------------------------------------------------------
 
 type Node interface {
+	Context() *string
 	Loc() *LocationRange
 	FreeVariables() Identifiers
 	SetFreeVariables(Identifiers)
+	SetContext(*string)
 }
 type Nodes []Node
 
@@ -41,6 +43,7 @@ type Nodes []Node
 
 type NodeBase struct {
 	loc           LocationRange
+	context       *string
 	freeVariables Identifiers
 }
 
@@ -68,6 +71,14 @@ func (n *NodeBase) FreeVariables() Identifiers {
 
 func (n *NodeBase) SetFreeVariables(idents Identifiers) {
 	n.freeVariables = idents
+}
+
+func (n *NodeBase) Context() *string {
+	return n.context
+}
+
+func (n *NodeBase) SetContext(context *string) {
+	n.context = context
 }
 
 // ---------------------------------------------------------------------------
