@@ -52,4 +52,5 @@ func Lint(node ast.Node, e *ErrorWriter) {
 			e.writeError(parser.MakeStaticError("Unused variable: "+string(v.name), *v.declNode.Loc()))
 		}
 	}
+	prepareTypes(node, make(exprTypes))
 }
