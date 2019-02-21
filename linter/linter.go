@@ -4,6 +4,7 @@ package linter
 import (
 	"io"
 
+	jsonnet "github.com/google/go-jsonnet"
 	"github.com/google/go-jsonnet/ast"
 	"github.com/google/go-jsonnet/parser"
 )
@@ -13,11 +14,12 @@ import (
 type ErrorWriter struct {
 	ErrorsFound bool
 	Writer      io.Writer
+	Formatter   jsonnet.ErrorFormatter
 }
 
 func (e *ErrorWriter) writeError(err parser.StaticError) {
 	e.ErrorsFound = true
-	e.Writer.Write([]byte(err.Error() + "\n"))
+	e.Writer.Write([]byte(e.Formatter.Format(err) + "\n"))
 }
 
 type variable struct {
@@ -52,5 +54,21 @@ func Lint(node ast.Node, e *ErrorWriter) {
 			e.writeError(parser.MakeStaticError("Unused variable: "+string(v.name), *v.declNode.Loc()))
 		}
 	}
-	prepareTypes(node, make(exprTypes))
+	et := make(exprTypes)
+	ec := ErrCollector{}
+	prepareTypes(node, et)
+	check(node, et, &ec)
+	for _, err := range ec.errs {
+		e.writeError(err)
+	}
+}
+
+func RunLint(filename string, code string, errWriter *ErrorWriter) bool {
+	node, err := jsonnet.SnippetToAST(filename, code)
+	if err != nil {
+		errWriter.writeError(err.(parser.StaticError)) // ugly but true
+		return true
+	}
+	Lint(node, errWriter)
+	return errWriter.ErrorsFound
 }

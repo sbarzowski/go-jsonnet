@@ -5,6 +5,7 @@ import (
 	"io/ioutil"
 	"os"
 
+	"github.com/fatih/color"
 	"github.com/google/go-jsonnet/linter"
 
 	jsonnet "github.com/google/go-jsonnet"
@@ -40,14 +41,12 @@ func main() {
 		die(err)
 	}
 	inputFile.Close()
-	node, err := jsonnet.SnippetToAST(p, string(data))
-	if err != nil {
-		die(err)
-	}
 	errWriter := &linter.ErrorWriter{
-		Writer: os.Stderr,
+		Writer:    os.Stderr,
+		Formatter: jsonnet.LinterFormatter(),
 	}
-	linter.Lint(node, errWriter)
+	errWriter.Formatter.SetColorFormatter(color.New(color.FgRed).Fprintf)
+	linter.RunLint(p, string(data), errWriter)
 	if errWriter.ErrorsFound {
 		fmt.Fprintf(os.Stderr, "Problems found!\n")
 		ExitProblemsFound()

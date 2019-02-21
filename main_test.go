@@ -32,7 +32,6 @@ import (
 
 	"github.com/google/go-jsonnet/ast"
 	"github.com/google/go-jsonnet/parser"
-	"github.com/sergi/go-diff/diffmatchpatch"
 )
 
 var update = flag.Bool("update", false, "update .golden files")
@@ -215,7 +214,7 @@ func runJsonnet(i jsonnetInput) jsonnetResult {
 	return runInternalJsonnet(i)
 }
 
-func compareGolden(result string, golden []byte) (string, bool) {
+func CompareGolden(result string, golden []byte) (string, bool) {
 	if !bytes.Equal(golden, []byte(result)) {
 		// TODO(sbarzowski) better reporting of differences in whitespace
 		// missing newline issues can be very subtle now
@@ -224,7 +223,7 @@ func compareGolden(result string, golden []byte) (string, bool) {
 	return "", false
 }
 
-func writeFile(path string, content []byte, mode os.FileMode) (changed bool, err error) {
+func WriteFile(path string, content []byte, mode os.FileMode) (changed bool, err error) {
 	old, err := ioutil.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {
 		return false, err
@@ -246,7 +245,7 @@ func compareSingleGolden(path string, result jsonnetResult) []error {
 	if err != nil {
 		return []error{fmt.Errorf("reading file %s: %v", path, err)}
 	}
-	if diff, hasDiff := compareGolden(result.output, golden); hasDiff {
+	if diff, hasDiff := CompareGolden(result.output, golden); hasDiff {
 		return []error{fmt.Errorf("golden file %v has diff:\n%v", path, diff)}
 	}
 	return nil
@@ -256,7 +255,7 @@ func updateSingleGolden(path string, result jsonnetResult) (updated []string, er
 	if result.outputMulti != nil {
 		return nil, fmt.Errorf("outputMulti is populated in a single-file test for %v", path)
 	}
-	changed, err := writeFile(path, []byte(result.output), 0666)
+	changed, err := WriteFile(path, []byte(result.output), 0666)
 	if err != nil {
 		return nil, fmt.Errorf("updating golden file %v: %v", path, err)
 	}
@@ -289,7 +288,7 @@ func compareMultifileGolden(path string, result jsonnetResult) []error {
 			errs = append(errs, fmt.Errorf("jsonnet outputted file %v which does not exist in goldens", fn))
 			continue
 		}
-		if diff, hasDiff := compareGolden(content, goldenContent[fn]); hasDiff {
+		if diff, hasDiff := CompareGolden(content, goldenContent[fn]); hasDiff {
 			errs = append(errs, fmt.Errorf("golden file %v has diff:\n%v", fn, diff))
 		}
 	}
@@ -303,7 +302,7 @@ func updateMultifileGolden(path string, result jsonnetResult) ([]string, error) 
 	}
 	var updatedFiles []string
 	for fn, content := range result.outputMulti {
-		updated, err := writeFile(filepath.Join(path, fn), []byte(content), 0666)
+		updated, err := WriteFile(filepath.Join(path, fn), []byte(content), 0666)
 		if err != nil {
 			return nil, fmt.Errorf("updating golden file %v: %v", fn, err)
 		}
@@ -522,10 +521,4 @@ func TestEvalUnusualFilenames(t *testing.T) {
 			})
 		})
 	}
-}
-
-func diff(a, b string) string {
-	dmp := diffmatchpatch.New()
-	diffs := dmp.DiffMain(a, b, false)
-	return dmp.DiffPrettyText(diffs)
 }

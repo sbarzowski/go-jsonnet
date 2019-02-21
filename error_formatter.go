@@ -56,6 +56,11 @@ type termErrorFormatter struct {
 	sp *ast.SourceProvider
 }
 
+// TODO(sbarzowski) for linter, do something else later
+func LinterFormatter() ErrorFormatter {
+	return &termErrorFormatter{pretty: true, maxStackTraceSize: 9}
+}
+
 func (ef *termErrorFormatter) SetMaxStackTraceSize(size int) {
 	ef.maxStackTraceSize = size
 }

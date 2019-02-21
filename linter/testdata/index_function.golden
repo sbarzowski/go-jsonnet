@@ -1,0 +1,5 @@
+testdata/index_function:1:1-20 Indexed value is neither an array nor an object
+
+(function(x) x)[42]
+
+

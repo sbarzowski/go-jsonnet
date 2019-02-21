@@ -1,0 +1,5 @@
+testdata/call_integer:1:1-7 Called value is not a function
+
+42(17)
+
+
