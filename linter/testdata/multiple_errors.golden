@@ -1,0 +1,16 @@
+testdata/multiple_errors:(1:1)-(2:10) Unused variable: foo
+
+local foo = {}[42];
+[]["foo"]
+
+
+testdata/multiple_errors:2:1-10 Indexed value is assumed to be an array, but index is not a number
+
+[]["foo"]
+
+
+testdata/multiple_errors:1:13-19 Indexed value is assumed to be an object, but index is not a string
+
+local foo = {}[42];
+
+

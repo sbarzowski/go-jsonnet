@@ -1,1 +1,1 @@
-(std.extVar('foo'))[std.extVar('bar)]
+(std.extVar('foo'))[std.extVar('bar')]

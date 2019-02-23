@@ -48,66 +48,68 @@ func VoidType() *TypeDesc {
 	return &TypeDesc{}
 }
 
-func prepareTypes(node ast.Node, typeOf exprTypes) {
-	prepareSubexprTypes(node, typeOf)
+func calcType(node ast.Node, typeOf exprTypes) *TypeDesc {
 	switch node := node.(type) {
 	case *ast.Array:
-		typeOf[node] = &TypeDesc{Array: true}
+		return &TypeDesc{Array: true}
 	case *ast.Binary:
 		// complicated
-		typeOf[node] = AnyType()
+		return AnyType()
 	case *ast.Unary:
 		// complicated
-		typeOf[node] = AnyType()
+		return AnyType()
 	case *ast.Conditional:
 		// complicated
-		typeOf[node] = AnyType()
+		return AnyType()
 	case *ast.Var:
 		// need to get expr of var
 		// We may not know the type of the Var yet, for now, let's assume Any in such case
+		return AnyType()
 	case *ast.DesugaredObject:
 		// TODO
-		typeOf[node] = &TypeDesc{Object: true}
+		return &TypeDesc{Object: true}
 	case *ast.Error:
-		typeOf[node] = VoidType()
+		return VoidType()
 	case *ast.Index:
 		// indexType := typeOf[node.Index]
 		// TODO
-		typeOf[node] = AnyType()
+		return AnyType()
 	case *ast.Import:
 		// complicated
-		typeOf[node] = AnyType()
+		return AnyType()
 	case *ast.LiteralBoolean:
-		typeOf[node] = &TypeDesc{Bool: true}
+		return &TypeDesc{Bool: true}
 	case *ast.LiteralNull:
-		typeOf[node] = &TypeDesc{Null: true}
+		return &TypeDesc{Null: true}
 
 	case *ast.LiteralNumber:
-		typeOf[node] = &TypeDesc{Number: true}
+		return &TypeDesc{Number: true}
 
 	case *ast.LiteralString:
-		typeOf[node] = &TypeDesc{String: true}
+		return &TypeDesc{String: true}
 
 	case *ast.Local:
-		typeOf[node] = typeOf[node.Body]
+		return typeOf[node.Body]
 	case *ast.Self:
 		// no recursion yet
-		typeOf[node] = &TypeDesc{Object: true}
+		return &TypeDesc{Object: true}
 	case *ast.SuperIndex:
-		typeOf[node] = &TypeDesc{Object: true}
+		return &TypeDesc{Object: true}
 	case *ast.InSuper:
-		typeOf[node] = &TypeDesc{Bool: true}
+		return &TypeDesc{Bool: true}
 	case *ast.Function:
 		// TODO(sbarzowski) more fancy description of functions...
-		typeOf[node] = &TypeDesc{Function: true}
+		return &TypeDesc{Function: true}
 	case *ast.Apply:
 		// Can't do anything, before we have a better description of function types
-		typeOf[node] = AnyType()
-	default:
-		typeOf[node] = AnyType()
-		panic(fmt.Sprintf("Unexpected %t", node))
-
+		return AnyType()
 	}
+	panic(fmt.Sprintf("Unexpected %t", node))
+}
+
+func prepareTypes(node ast.Node, typeOf exprTypes) {
+	prepareSubexprTypes(node, typeOf)
+	typeOf[node] = calcType(node, typeOf)
 }
 
 func checkSubexpr(node ast.Node, typeOf exprTypes, ec *ErrCollector) {
@@ -138,18 +140,31 @@ func check(node ast.Node, typeOf exprTypes, ec *ErrCollector) {
 	case *ast.Index:
 		targetType := typeOf[node.Target]
 		indexType := typeOf[node.Index]
-		if !targetType.Array && !targetType.Object {
-			ec.staticErr("Indexed value is neither an array nor an object", node.Loc())
-		} else if !targetType.Array {
-			if !indexType.Number {
-				ec.staticErr("Indexed value is assumed to be an array, but index is not an integer", node.Loc())
-			}
+		// spew.Dump(indexType)
+		// spew.Dump(targetType)
+		if !targetType.Array && !targetType.Object && !targetType.String {
+			ec.staticErr("Indexed value is neither an array nor an object nor a string", node.Loc())
 		} else if !targetType.Object {
+			// It's not an object, so it must be an array or a string
+			var assumedType string
+			if targetType.Array && targetType.String {
+				assumedType = "an array or a string"
+			} else if targetType.Array {
+				assumedType = "an array"
+			} else {
+				assumedType = "a string"
+			}
+			if !indexType.Number {
+				ec.staticErr("Indexed value is assumed to be "+assumedType+", but index is not a number", node.Loc())
+			}
+		} else if !targetType.Array {
+			// It's not an array so it must be an object
 			if !indexType.String {
 				ec.staticErr("Indexed value is assumed to be an object, but index is not a string", node.Loc())
 			}
-		} else {
-			ec.staticErr("Index is neither an integer (for indexing arrays) nor a string (for indexing objects)", node.Loc())
+		} else if !indexType.Number && !indexType.String {
+			// We don't know what the target is, but we sure cannot index it with that
+			ec.staticErr("Index is neither a number (for indexing arrays and string) nor a string (for indexing objects)", node.Loc())
 		}
 	}
 }
