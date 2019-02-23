@@ -48,6 +48,18 @@ func VoidType() *TypeDesc {
 	return &TypeDesc{}
 }
 
+func widen(a *TypeDesc, b *TypeDesc) *TypeDesc {
+	return &TypeDesc{
+		Bool:     a.Bool || b.Bool,
+		Number:   a.Number || b.Number,
+		String:   a.String || b.String,
+		Null:     a.Null || b.Null,
+		Function: a.Function || b.Function,
+		Object:   a.Object || b.Object,
+		Array:    a.Array || b.Array,
+	}
+}
+
 func calcType(node ast.Node, typeOf exprTypes) *TypeDesc {
 	switch node := node.(type) {
 	case *ast.Array:
@@ -59,8 +71,7 @@ func calcType(node ast.Node, typeOf exprTypes) *TypeDesc {
 		// complicated
 		return AnyType()
 	case *ast.Conditional:
-		// complicated
-		return AnyType()
+		return widen(typeOf[node.BranchTrue], typeOf[node.BranchFalse])
 	case *ast.Var:
 		// need to get expr of var
 		// We may not know the type of the Var yet, for now, let's assume Any in such case
