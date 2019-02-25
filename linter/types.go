@@ -69,7 +69,16 @@ func calcType(node ast.Node, typeOf exprTypes) *TypeDesc {
 		return AnyType()
 	case *ast.Unary:
 		// complicated
-		return AnyType()
+		switch node.Op {
+		case ast.UopNot:
+			return &TypeDesc{Bool: true}
+		case ast.UopBitwiseNot:
+		case ast.UopPlus:
+		case ast.UopMinus:
+			return &TypeDesc{Number: true}
+		default:
+			panic(fmt.Sprintf("Unrecognized unary operator %v", node.Op))
+		}
 	case *ast.Conditional:
 		return widen(typeOf[node.BranchTrue], typeOf[node.BranchFalse])
 	case *ast.Var:
@@ -177,6 +186,8 @@ func check(node ast.Node, typeOf exprTypes, ec *ErrCollector) {
 			// We don't know what the target is, but we sure cannot index it with that
 			ec.staticErr("Index is neither a number (for indexing arrays and string) nor a string (for indexing objects)", node.Loc())
 		}
+	case *ast.Unary:
+		// TODO(sbarzowski) this
 	}
 }
 
