@@ -60,11 +60,11 @@ char *jsonnet_realloc(JsonnetVm *vm, char *str, size_t sz)
     }
 }
 
-void jsonnet_native_callback(struct JsonnetVm *vm, const char *name, JsonnetNativeCallback *cb,
-    void *ctx, const char *const *params)
-{
-    todo();
-}
+// void jsonnet_native_callback(struct JsonnetVm *vm, const char *name, JsonnetNativeCallback *cb,
+//     void *ctx, const char *const *params)
+// {
+//     todo();
+// }
 
 char *jsonnet_evaluate_file_multi(JsonnetVm *vm, const char *filename, int *error)
 {

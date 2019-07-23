@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"unsafe"
 
 	"github.com/google/go-jsonnet"
 	"github.com/google/go-jsonnet/ast"
@@ -156,6 +157,47 @@ func jsonnet_tla_var(vmRef *C.struct_JsonnetVm, key, value *C.char) {
 func jsonnet_tla_code(vmRef *C.struct_JsonnetVm, key, value *C.char) {
 	vm := getVM(vmRef)
 	vm.TLACode(C.GoString(key), C.GoString(value))
+}
+
+func indexCharPtrPtr(arr **C.char, i int) *C.char {
+	return (*[1<<28]*C.char)(unsafe.Pointer(arr))[i]
+}
+
+func goJSON(val *C.struct_JsonnetJsonValue) interface{} {
+	return nil
+}
+
+func cJSON(val interface{}) *C.struct_JsonnetJsonValue {
+	return nil
+}
+
+//export jsonnet_native_callback
+func jsonnet_native_callback(vmRef *C.struct_JsonnetVm, name *C.char, cb *C.JsonnetNativeCallback, ctx unsafe.Pointer, cparams **C.char) {
+	vm := getVM(vmRef)
+	f := func ([]interface{}) (interface{}, error) {
+		var success C.int
+		C.jsonnet_internal_call_callback(cb, ctx, nil, &success)
+		return nil, nil
+	}
+	
+	// get parameters
+	params := ast.Identifiers{}
+
+	i := 0
+	for {
+		elem := indexCharPtrPtr(cparams, i)
+		if elem == nil {
+			break
+		}
+		params = append(params, ast.Identifier(C.GoString(elem)))
+		i++
+	}
+
+	vm.NativeFunction(&jsonnet.NativeFunction{
+		Func: f,
+		Params: params,
+		Name: C.GoString(name),
+	})
 }
 
 func main() {

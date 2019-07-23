@@ -25,7 +25,7 @@ import (
 //+gen set
 type Identifier string
 
-// Identifiers represents an Identifier slice.
+// Identifiers is a slice of Identifiers.
 type Identifiers []Identifier
 
 // TODO(jbeda) implement interning of identifiers if necessary.  The C++
