@@ -56,7 +56,7 @@ func Lint(node ast.Node, e *ErrorWriter) {
 	}
 	et := make(exprTypes)
 	ec := ErrCollector{}
-	prepareTypes(node, et)
+	prepareTypesWithGraph(node, et)
 	check(node, et, &ec)
 	for _, err := range ec.errs {
 		e.writeError(err)
