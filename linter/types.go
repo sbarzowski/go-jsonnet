@@ -2,7 +2,13 @@ package linter
 
 import (
 	"fmt"
+	"os"
+	"strings"
 
+	"github.com/davecgh/go-spew/spew"
+	"github.com/fatih/color"
+
+	jsonnet "github.com/google/go-jsonnet"
 	"github.com/google/go-jsonnet/ast"
 	"github.com/google/go-jsonnet/parser"
 )
@@ -43,6 +49,38 @@ type TypeDesc struct {
 	Array    bool // TODO(sbarzowski) better rep
 }
 
+func describe(t *TypeDesc) string {
+	if t.Bool && t.Number && t.String && t.Null && t.Function && t.Object && t.Array {
+		return "any"
+	}
+	if !t.Bool && !t.Number && !t.String && !t.Null && !t.Function && !t.Object && !t.Array {
+		return "void"
+	}
+	parts := []string{}
+	if t.Bool {
+		parts = append(parts, "bool")
+	}
+	if t.Number {
+		parts = append(parts, "number")
+	}
+	if t.String {
+		parts = append(parts, "string")
+	}
+	if t.Null {
+		parts = append(parts, "null")
+	}
+	if t.Function {
+		parts = append(parts, "function")
+	}
+	if t.Object {
+		parts = append(parts, "object")
+	}
+	if t.Array {
+		parts = append(parts, "array")
+	}
+	return strings.Join(parts, " or ")
+}
+
 type PlaceholderID int
 type stronglyConnectedComponentID int
 
@@ -81,6 +119,7 @@ func (g *TypeGraph) makeTopoOrder() {
 	visit = func(p PlaceholderID) {
 		visited[p] = true
 		for _, child := range g.placeholder(p).contains {
+			fmt.Printf("%d -> %d\n", p, child)
 			if !visited[child] {
 				visit(child)
 			}
@@ -93,6 +132,7 @@ func (g *TypeGraph) makeTopoOrder() {
 			visit(PlaceholderID(i))
 		}
 	}
+	spew.Dump(g.topoOrder)
 }
 
 func (g *TypeGraph) findTypes() {
@@ -102,18 +142,19 @@ func (g *TypeGraph) findTypes() {
 			dependentOn[dependency] = append(dependentOn[dependency], PlaceholderID(i))
 		}
 	}
+	spew.Dump(dependentOn)
 
 	visited := make([]bool, len(g._placeholders))
 	g.sccOf = make([]stronglyConnectedComponentID, len(g._placeholders))
 
-	stronglyConnectedComponent := make([]PlaceholderID, 0, 10)
+	stronglyConnectedComponents := make([][]PlaceholderID, 0)
 	var sccID stronglyConnectedComponentID
 
 	var visit func(p PlaceholderID)
 	visit = func(p PlaceholderID) {
 		visited[p] = true
 		g.sccOf[p] = sccID
-		stronglyConnectedComponent = append(stronglyConnectedComponent, p)
+		stronglyConnectedComponents[sccID] = append(stronglyConnectedComponents[sccID], p)
 		for _, dependent := range dependentOn[p] {
 			if !visited[dependent] {
 				visit(dependent)
@@ -123,21 +164,27 @@ func (g *TypeGraph) findTypes() {
 
 	g.upperBound = make([]TypeDesc, len(g._placeholders))
 
-	for _, p := range g.topoOrder {
+	for i := len(g.topoOrder) - 1; i >= 0; i-- {
+		p := g.topoOrder[i]
 		if !visited[p] {
+			stronglyConnectedComponents = append(stronglyConnectedComponents, make([]PlaceholderID, 0, 1))
 			visit(p)
-			g.resolveTypesInSCC(stronglyConnectedComponent)
 			sccID++
 		}
-		// Clear without freeing the underlying memory
-		stronglyConnectedComponent = stronglyConnectedComponent[:0]
+	}
+
+	for i := len(stronglyConnectedComponents) - 1; i >= 0; i-- {
+		scc := stronglyConnectedComponents[i]
+		g.resolveTypesInSCC(scc)
 	}
 }
 
 func (g *TypeGraph) resolveTypesInSCC(scc []PlaceholderID) {
 	sccID := g.sccOf[scc[0]]
 
-	common := *AnyType()
+	spew.Dump(scc)
+
+	common := *VoidType()
 
 	for _, p := range scc {
 		for _, contained := range g.placeholder(p).contains {
@@ -145,6 +192,10 @@ func (g *TypeGraph) resolveTypesInSCC(scc []PlaceholderID) {
 				common = *widen(&common, &g.upperBound[contained])
 			}
 		}
+	}
+
+	for _, p := range scc {
+		common = *widen(&common, &g.placeholder(p).concrete)
 	}
 
 	for _, p := range scc {
@@ -176,12 +227,6 @@ func tpRef(p PlaceholderID) TypePlaceholder {
 type exprTypes map[ast.Node]*TypeDesc
 type exprTP map[ast.Node]*TypePlaceholder
 
-func prepareSubexprTypes(node ast.Node, typeOf exprTypes) {
-	for _, child := range parser.Children(node) {
-		prepareTypes(child, typeOf)
-	}
-}
-
 func AnyType() *TypeDesc {
 	return &TypeDesc{
 		Bool:     true,
@@ -211,15 +256,22 @@ func widen(a *TypeDesc, b *TypeDesc) *TypeDesc {
 }
 
 func prepareTP(node ast.Node, g *TypeGraph) {
-	prepareSubexprTPs(node, g)
-	placeholderID := g.newPlaceholder()
-	*(g.placeholder(placeholderID)) = calcTP(node, g)
-}
-
-func prepareSubexprTPs(node ast.Node, g *TypeGraph) {
-	for _, child := range parser.Children(node) {
-		prepareTP(child, g)
+	switch node := node.(type) {
+	case *ast.Local:
+		for i := range node.Binds {
+			b := &node.Binds[i]
+			// TODO(sbarzowski) what about func? is desugaring avoiding that
+			prepareTP(b.Body, g)
+		}
+		prepareTP(node.Body, g)
+	default:
+		for _, child := range parser.Children(node) {
+			prepareTP(child, g)
+		}
 	}
+	placeholderID := g.newPlaceholder()
+	g.exprPlaceholder[node] = placeholderID
+	*(g.placeholder(placeholderID)) = calcTP(node, g)
 }
 
 func calcTP(node ast.Node, g *TypeGraph) TypePlaceholder {
@@ -291,91 +343,23 @@ func calcTP(node ast.Node, g *TypeGraph) TypePlaceholder {
 	panic(fmt.Sprintf("Unexpected %t", node))
 }
 
-func calcType(node ast.Node, typeOf exprTypes) *TypeDesc {
-	switch node := node.(type) {
-	case *ast.Array:
-		return &TypeDesc{Array: true}
-	case *ast.Binary:
-		// complicated
-		return AnyType()
-	case *ast.Unary:
-		// complicated
-		switch node.Op {
-		case ast.UopNot:
-			return &TypeDesc{Bool: true}
-		case ast.UopBitwiseNot:
-		case ast.UopPlus:
-		case ast.UopMinus:
-			return &TypeDesc{Number: true}
-		default:
-			panic(fmt.Sprintf("Unrecognized unary operator %v", node.Op))
-		}
-	case *ast.Conditional:
-		return widen(typeOf[node.BranchTrue], typeOf[node.BranchFalse])
-	case *ast.Var:
-		// need to get expr of var
-		// We may not know the type of the Var yet, for now, let's assume Any in such case
-		return AnyType()
-	case *ast.DesugaredObject:
-		// TODO
-		return &TypeDesc{Object: true}
-	case *ast.Error:
-		return VoidType()
-	case *ast.Index:
-		// indexType := typeOf[node.Index]
-		// TODO
-		return AnyType()
-	case *ast.Import:
-		// complicated
-		return AnyType()
-	case *ast.LiteralBoolean:
-		return &TypeDesc{Bool: true}
-	case *ast.LiteralNull:
-		return &TypeDesc{Null: true}
-
-	case *ast.LiteralNumber:
-		return &TypeDesc{Number: true}
-
-	case *ast.LiteralString:
-		return &TypeDesc{String: true}
-
-	case *ast.Local:
-		return typeOf[node.Body]
-	case *ast.Self:
-		// no recursion yet
-		return &TypeDesc{Object: true}
-	case *ast.SuperIndex:
-		return &TypeDesc{Object: true}
-	case *ast.InSuper:
-		return &TypeDesc{Bool: true}
-	case *ast.Function:
-		// TODO(sbarzowski) more fancy description of functions...
-		return &TypeDesc{Function: true}
-	case *ast.Apply:
-		// Can't do anything, before we have a better description of function types
-		return AnyType()
-	}
-	panic(fmt.Sprintf("Unexpected %t", node))
-}
-
-func prepareTypes(node ast.Node, typeOf exprTypes) {
-	prepareSubexprTypes(node, typeOf)
-	typeOf[node] = calcType(node, typeOf)
-}
-
-func checkSubexpr(node ast.Node, typeOf exprTypes, ec *ErrCollector) {
-	for _, child := range parser.Children(node) {
-		check(child, typeOf, ec)
-	}
-}
-
 func prepareTypesWithGraph(node ast.Node, typeOf exprTypes) {
-	g := TypeGraph{}
+	g := TypeGraph{
+		exprPlaceholder: make(map[ast.Node]PlaceholderID),
+	}
 	prepareTP(node, &g)
 	g.makeTopoOrder()
 	g.findTypes()
+	spew.Dump(g.upperBound)
 	for e, p := range g.exprPlaceholder {
-		fmt.Println(e, p)
+		// TODO(sbarzowski) using errors for debugging, ugh
+		lf := jsonnet.LinterFormatter()
+		lf.SetColorFormatter(color.New(color.FgRed).Fprintf)
+		fmt.Fprintf(os.Stderr, lf.Format(parser.StaticError{
+			Loc: *e.Loc(),
+			Msg: fmt.Sprintf("placeholder %d is %s", p, describe(&g.upperBound[p])),
+		}))
+
 		// eh, here a copy would probably be better
 		typeOf[e] = &g.upperBound[p]
 	}
@@ -391,6 +375,12 @@ func (ec *ErrCollector) collect(err parser.StaticError) {
 
 func (ec *ErrCollector) staticErr(msg string, loc *ast.LocationRange) {
 	ec.collect(parser.MakeStaticError(msg, *loc))
+}
+
+func checkSubexpr(node ast.Node, typeOf exprTypes, ec *ErrCollector) {
+	for _, child := range parser.Children(node) {
+		check(child, typeOf, ec)
+	}
 }
 
 func check(node ast.Node, typeOf exprTypes, ec *ErrCollector) {

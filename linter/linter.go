@@ -4,6 +4,8 @@ package linter
 import (
 	"io"
 
+	"github.com/davecgh/go-spew/spew"
+
 	jsonnet "github.com/google/go-jsonnet"
 	"github.com/google/go-jsonnet/ast"
 	"github.com/google/go-jsonnet/parser"
@@ -34,7 +36,7 @@ type variable struct {
 // It is global, i.e. it holds the same data regardless of scope we're
 // currently analyzing.
 type LintingInfo struct {
-	variables []variable
+	variables []*variable
 }
 
 // Lint analyses a node and reports any issues it encounters to an error writer.
@@ -50,6 +52,7 @@ func Lint(node ast.Node, e *ErrorWriter) {
 	}
 	findVariables(node, &lintingInfo, vScope{"std": &std})
 	for _, v := range lintingInfo.variables {
+		spew.Dump(v.uses)
 		if len(v.uses) == 0 && !v.param {
 			e.writeError(parser.MakeStaticError("Unused variable: "+string(v.name), *v.declNode.Loc()))
 		}
