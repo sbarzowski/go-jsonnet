@@ -1,4 +1,4 @@
-package linter
+package types
 
 import (
 	"fmt"
@@ -10,6 +10,7 @@ import (
 
 	jsonnet "github.com/google/go-jsonnet"
 	"github.com/google/go-jsonnet/ast"
+	"github.com/google/go-jsonnet/linter/internal/common"
 	"github.com/google/go-jsonnet/parser"
 )
 
@@ -18,7 +19,7 @@ import (
 // Of course we cannot do this accurately at all times, but even
 // coarse grained information about "types" can help with some bugs.
 // We are mostly interested in simple issues - like using a nonexistent
-// field of an object or
+// field of an object or treating an array like a function.
 //
 // Main assumptions:
 // * It has to work with existing programs well
@@ -34,11 +35,6 @@ import (
 
 // TODO(sbarzowski) what should be exported and what shouldn't
 
-type TypeInfo interface {
-	// A concise, human readable description of the type
-	TypeName() string
-}
-
 type TypeDesc struct {
 	Bool     bool
 	Number   bool
@@ -49,7 +45,7 @@ type TypeDesc struct {
 	Array    bool // TODO(sbarzowski) better rep
 }
 
-func describe(t *TypeDesc) string {
+func Describe(t *TypeDesc) string {
 	if t.Bool && t.Number && t.String && t.Null && t.Function && t.Object && t.Array {
 		return "any"
 	}
@@ -81,42 +77,50 @@ func describe(t *TypeDesc) string {
 	return strings.Join(parts, " or ")
 }
 
-type PlaceholderID int
+type placeholderID int
 type stronglyConnectedComponentID int
 
-type TypePlaceholder struct {
+// 0 value for placeholderID acting as "nil" for placeholders
+var noType placeholderID
+
+type typePlaceholder struct {
 	// Derived from AST
 	concrete TypeDesc
 
-	contains []PlaceholderID
+	contains []placeholderID
+
+	indexes placeholderID
 }
 
-type TypeGraph struct {
-	_placeholders   []TypePlaceholder
-	exprPlaceholder map[ast.Node]PlaceholderID
+type typeGraph struct {
+	_placeholders   []typePlaceholder
+	exprPlaceholder map[ast.Node]placeholderID
 
-	topoOrder []PlaceholderID
+	topoOrder []placeholderID
 	sccOf     []stronglyConnectedComponentID
 
 	upperBound []TypeDesc
+
+	// Additional information about the program
+	varAt map[ast.Node]*common.Variable
 }
 
-func (g *TypeGraph) placeholder(id PlaceholderID) *TypePlaceholder {
+func (g *typeGraph) placeholder(id placeholderID) *typePlaceholder {
 	return &g._placeholders[id]
 }
 
-func (g *TypeGraph) newPlaceholder() PlaceholderID {
-	g._placeholders = append(g._placeholders, TypePlaceholder{})
-	return PlaceholderID(len(g._placeholders) - 1)
+func (g *typeGraph) newPlaceholder() placeholderID {
+	g._placeholders = append(g._placeholders, typePlaceholder{})
+	return placeholderID(len(g._placeholders) - 1)
 }
 
-func (g *TypeGraph) makeTopoOrder() {
+func (g *typeGraph) makeTopoOrder() {
 	visited := make([]bool, len(g._placeholders))
 
-	g.topoOrder = make([]PlaceholderID, 0, len(g._placeholders))
+	g.topoOrder = make([]placeholderID, 0, len(g._placeholders))
 
-	var visit func(p PlaceholderID)
-	visit = func(p PlaceholderID) {
+	var visit func(p placeholderID)
+	visit = func(p placeholderID) {
 		visited[p] = true
 		for _, child := range g.placeholder(p).contains {
 			fmt.Printf("%d -> %d\n", p, child)
@@ -129,17 +133,17 @@ func (g *TypeGraph) makeTopoOrder() {
 
 	for i := range g._placeholders {
 		if !visited[i] {
-			visit(PlaceholderID(i))
+			visit(placeholderID(i))
 		}
 	}
 	spew.Dump(g.topoOrder)
 }
 
-func (g *TypeGraph) findTypes() {
-	dependentOn := make([][]PlaceholderID, len(g._placeholders))
+func (g *typeGraph) findTypes() {
+	dependentOn := make([][]placeholderID, len(g._placeholders))
 	for i, p := range g._placeholders {
 		for _, dependency := range p.contains {
-			dependentOn[dependency] = append(dependentOn[dependency], PlaceholderID(i))
+			dependentOn[dependency] = append(dependentOn[dependency], placeholderID(i))
 		}
 	}
 	spew.Dump(dependentOn)
@@ -147,11 +151,11 @@ func (g *TypeGraph) findTypes() {
 	visited := make([]bool, len(g._placeholders))
 	g.sccOf = make([]stronglyConnectedComponentID, len(g._placeholders))
 
-	stronglyConnectedComponents := make([][]PlaceholderID, 0)
+	stronglyConnectedComponents := make([][]placeholderID, 0)
 	var sccID stronglyConnectedComponentID
 
-	var visit func(p PlaceholderID)
-	visit = func(p PlaceholderID) {
+	var visit func(p placeholderID)
+	visit = func(p placeholderID) {
 		visited[p] = true
 		g.sccOf[p] = sccID
 		stronglyConnectedComponents[sccID] = append(stronglyConnectedComponents[sccID], p)
@@ -167,7 +171,7 @@ func (g *TypeGraph) findTypes() {
 	for i := len(g.topoOrder) - 1; i >= 0; i-- {
 		p := g.topoOrder[i]
 		if !visited[p] {
-			stronglyConnectedComponents = append(stronglyConnectedComponents, make([]PlaceholderID, 0, 1))
+			stronglyConnectedComponents = append(stronglyConnectedComponents, make([]placeholderID, 0, 1))
 			visit(p)
 			sccID++
 		}
@@ -179,55 +183,58 @@ func (g *TypeGraph) findTypes() {
 	}
 }
 
-func (g *TypeGraph) resolveTypesInSCC(scc []PlaceholderID) {
+func (g *typeGraph) resolveTypesInSCC(scc []placeholderID) {
 	sccID := g.sccOf[scc[0]]
 
+	fmt.Println("Strongly connected component")
 	spew.Dump(scc)
 
-	common := *VoidType()
+	common := *voidType()
 
 	for _, p := range scc {
 		for _, contained := range g.placeholder(p).contains {
 			if g.sccOf[contained] != sccID {
 				common = *widen(&common, &g.upperBound[contained])
+				fmt.Println("widening with:", contained, "result:", Describe(&common))
 			}
 		}
 	}
 
+	fmt.Println("common:", Describe(&common))
+
 	for _, p := range scc {
 		common = *widen(&common, &g.placeholder(p).concrete)
 	}
+
+	fmt.Println("final:", Describe(&common))
 
 	for _, p := range scc {
 		g.upperBound[p] = common
 	}
 }
 
-func concreteTP(t TypeDesc) TypePlaceholder {
-	return TypePlaceholder{
+func concreteTP(t TypeDesc) typePlaceholder {
+	return typePlaceholder{
 		concrete: t,
 		contains: nil,
 	}
 }
 
-func tpSum(p1, p2 PlaceholderID) TypePlaceholder {
-	return TypePlaceholder{
-		concrete: *VoidType(),
-		contains: []PlaceholderID{p1, p2},
+func tpSum(p1, p2 placeholderID) typePlaceholder {
+	return typePlaceholder{
+		concrete: *voidType(),
+		contains: []placeholderID{p1, p2},
 	}
 }
 
-func tpRef(p PlaceholderID) TypePlaceholder {
-	return TypePlaceholder{
-		concrete: *VoidType(),
-		contains: []PlaceholderID{p},
+func tpRef(p placeholderID) typePlaceholder {
+	return typePlaceholder{
+		concrete: *voidType(),
+		contains: []placeholderID{p},
 	}
 }
 
-type exprTypes map[ast.Node]*TypeDesc
-type exprTP map[ast.Node]*TypePlaceholder
-
-func AnyType() *TypeDesc {
+func anyType() *TypeDesc {
 	return &TypeDesc{
 		Bool:     true,
 		Number:   true,
@@ -239,11 +246,12 @@ func AnyType() *TypeDesc {
 	}
 }
 
-func VoidType() *TypeDesc {
+func voidType() *TypeDesc {
 	return &TypeDesc{}
 }
 
 func widen(a *TypeDesc, b *TypeDesc) *TypeDesc {
+	fmt.Println("Widening (", Describe(a), ") (", Describe(b), ")")
 	return &TypeDesc{
 		Bool:     a.Bool || b.Bool,
 		Number:   a.Number || b.Number,
@@ -255,13 +263,19 @@ func widen(a *TypeDesc, b *TypeDesc) *TypeDesc {
 	}
 }
 
-func prepareTP(node ast.Node, g *TypeGraph) {
+func prepareTPWithPlaceholder(node ast.Node, g *typeGraph, p placeholderID) {
 	switch node := node.(type) {
 	case *ast.Local:
+		bindPlaceholders := make([]placeholderID, len(node.Binds))
 		for i := range node.Binds {
-			b := &node.Binds[i]
-			// TODO(sbarzowski) what about func? is desugaring avoiding that
-			prepareTP(b.Body, g)
+			bindPlaceholders[i] = g.newPlaceholder()
+			fmt.Println("placeholder for bind", bindPlaceholders[i])
+			g.exprPlaceholder[node.Binds[i].Body] = bindPlaceholders[i]
+			fmt.Println("exprPlaceholder len =", len(g.exprPlaceholder))
+		}
+		for i := range node.Binds {
+			// TODO(sbarzowski) what about func? is desugaring allowing us to avoid that
+			prepareTPWithPlaceholder(node.Binds[i].Body, g, bindPlaceholders[i])
 		}
 		prepareTP(node.Body, g)
 	default:
@@ -269,18 +283,22 @@ func prepareTP(node ast.Node, g *TypeGraph) {
 			prepareTP(child, g)
 		}
 	}
-	placeholderID := g.newPlaceholder()
-	g.exprPlaceholder[node] = placeholderID
-	*(g.placeholder(placeholderID)) = calcTP(node, g)
+	*(g.placeholder(p)) = calcTP(node, g)
 }
 
-func calcTP(node ast.Node, g *TypeGraph) TypePlaceholder {
+func prepareTP(node ast.Node, g *typeGraph) {
+	p := g.newPlaceholder()
+	g.exprPlaceholder[node] = p
+	prepareTPWithPlaceholder(node, g, p)
+}
+
+func calcTP(node ast.Node, g *typeGraph) typePlaceholder {
 	switch node := node.(type) {
 	case *ast.Array:
 		return concreteTP(TypeDesc{Array: true})
 	case *ast.Binary:
 		// complicated
-		return concreteTP(*AnyType())
+		return concreteTP(*anyType())
 	case *ast.Unary:
 		// complicated
 		switch node.Op {
@@ -296,21 +314,31 @@ func calcTP(node ast.Node, g *TypeGraph) TypePlaceholder {
 	case *ast.Conditional:
 		return tpSum(g.exprPlaceholder[node.BranchTrue], g.exprPlaceholder[node.BranchFalse])
 	case *ast.Var:
-		// need to get expr of var
-		// We may not know the type of the Var yet, for now, let's assume Any in such case
-		return concreteTP(*AnyType())
+		v := g.varAt[node]
+		if v == nil {
+			panic("Could not find variable")
+		}
+		if v.Stdlib {
+			return concreteTP(TypeDesc{Object: true})
+		} else {
+			return tpRef(g.exprPlaceholder[v.BindNode])
+		}
 	case *ast.DesugaredObject:
 		// TODO
 		return concreteTP(TypeDesc{Object: true})
 	case *ast.Error:
-		return concreteTP(*VoidType())
+		return concreteTP(*voidType())
 	case *ast.Index:
 		// indexType := typeOf[node.Index]
 		// TODO
-		return concreteTP(*AnyType())
+		return typePlaceholder{
+			concrete: *voidType(),
+			contains: nil,
+			indexes:  g.exprPlaceholder[node.Target],
+		}
 	case *ast.Import:
 		// complicated
-		return concreteTP(*AnyType())
+		return concreteTP(*anyType())
 	case *ast.LiteralBoolean:
 		return concreteTP(TypeDesc{Bool: true})
 	case *ast.LiteralNull:
@@ -338,15 +366,21 @@ func calcTP(node ast.Node, g *TypeGraph) TypePlaceholder {
 		return concreteTP(TypeDesc{Function: true})
 	case *ast.Apply:
 		// Can't do anything, before we have a better description of function types
-		return concreteTP(*AnyType())
+		return concreteTP(*anyType())
 	}
 	panic(fmt.Sprintf("Unexpected %t", node))
 }
 
-func prepareTypesWithGraph(node ast.Node, typeOf exprTypes) {
-	g := TypeGraph{
-		exprPlaceholder: make(map[ast.Node]PlaceholderID),
+type ExprTypes map[ast.Node]TypeDesc
+
+func PrepareTypes(node ast.Node, typeOf ExprTypes, varAt map[ast.Node]*common.Variable) {
+	g := typeGraph{
+		exprPlaceholder: make(map[ast.Node]placeholderID),
+		varAt:           varAt,
 	}
+	// Create the "no-type" sentinel placeholder
+	g.newPlaceholder()
+
 	prepareTP(node, &g)
 	g.makeTopoOrder()
 	g.findTypes()
@@ -357,33 +391,33 @@ func prepareTypesWithGraph(node ast.Node, typeOf exprTypes) {
 		lf.SetColorFormatter(color.New(color.FgRed).Fprintf)
 		fmt.Fprintf(os.Stderr, lf.Format(parser.StaticError{
 			Loc: *e.Loc(),
-			Msg: fmt.Sprintf("placeholder %d is %s", p, describe(&g.upperBound[p])),
+			Msg: fmt.Sprintf("placeholder %d is %s", p, Describe(&g.upperBound[p])),
 		}))
 
-		// eh, here a copy would probably be better
-		typeOf[e] = &g.upperBound[p]
+		// TODO(sbarzowski) here we'll need to handle additional
+		typeOf[e] = g.upperBound[p]
 	}
 }
 
 type ErrCollector struct {
-	errs []parser.StaticError
+	Errs []parser.StaticError
 }
 
 func (ec *ErrCollector) collect(err parser.StaticError) {
-	ec.errs = append(ec.errs, err)
+	ec.Errs = append(ec.Errs, err)
 }
 
 func (ec *ErrCollector) staticErr(msg string, loc *ast.LocationRange) {
 	ec.collect(parser.MakeStaticError(msg, *loc))
 }
 
-func checkSubexpr(node ast.Node, typeOf exprTypes, ec *ErrCollector) {
+func checkSubexpr(node ast.Node, typeOf ExprTypes, ec *ErrCollector) {
 	for _, child := range parser.Children(node) {
-		check(child, typeOf, ec)
+		Check(child, typeOf, ec)
 	}
 }
 
-func check(node ast.Node, typeOf exprTypes, ec *ErrCollector) {
+func Check(node ast.Node, typeOf ExprTypes, ec *ErrCollector) {
 	checkSubexpr(node, typeOf, ec)
 	switch node := node.(type) {
 	case *ast.Apply:

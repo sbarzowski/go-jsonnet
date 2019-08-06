@@ -1,0 +1,5 @@
+testdata/indirect_call_integer:3:1-4 Called value is not a function
+
+g()
+
+

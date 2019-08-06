@@ -4,11 +4,12 @@ package linter
 import (
 	"io"
 
-	"github.com/davecgh/go-spew/spew"
-
 	jsonnet "github.com/google/go-jsonnet"
 	"github.com/google/go-jsonnet/ast"
 	"github.com/google/go-jsonnet/parser"
+
+	"github.com/google/go-jsonnet/linter/internal/common"
+	"github.com/google/go-jsonnet/linter/internal/types"
 )
 
 // ErrorWriter encapsulates a writer and an error state indicating when at least
@@ -24,44 +25,46 @@ func (e *ErrorWriter) writeError(err parser.StaticError) {
 	e.Writer.Write([]byte(e.Formatter.Format(err) + "\n"))
 }
 
-type variable struct {
-	name     ast.Identifier
-	declNode ast.Node
-	uses     []ast.Node
-	param    bool // TODO enum
-}
-
 // LintingInfo holds additional information about the program
 // which was gathered during linting. The data should only be added to it.
 // It is global, i.e. it holds the same data regardless of scope we're
 // currently analyzing.
 type LintingInfo struct {
-	variables []*variable
+	variables []*common.Variable
+	varAt     map[ast.Node]*common.Variable // Variable information at every use site
 }
 
 // Lint analyses a node and reports any issues it encounters to an error writer.
 func Lint(node ast.Node, e *ErrorWriter) {
 	lintingInfo := LintingInfo{
 		variables: nil,
+		varAt:     make(map[ast.Node]*common.Variable),
 	}
-	std := variable{
-		name:     "std",
-		declNode: nil,
-		uses:     nil,
-		param:    false,
+	std := common.Variable{
+		Name:       "std",
+		DeclNode:   nil,
+		Occurences: nil,
+		Param:      false,
+		Stdlib:     true,
 	}
+	lintingInfo.variables = append(lintingInfo.variables, &std)
 	findVariables(node, &lintingInfo, vScope{"std": &std})
 	for _, v := range lintingInfo.variables {
-		spew.Dump(v.uses)
-		if len(v.uses) == 0 && !v.param {
-			e.writeError(parser.MakeStaticError("Unused variable: "+string(v.name), *v.declNode.Loc()))
+		for _, u := range v.Occurences {
+			lintingInfo.varAt[u] = v
 		}
 	}
-	et := make(exprTypes)
-	ec := ErrCollector{}
-	prepareTypesWithGraph(node, et)
-	check(node, et, &ec)
-	for _, err := range ec.errs {
+	for _, v := range lintingInfo.variables {
+		if len(v.Occurences) == 0 && !v.Param && !v.Stdlib {
+			e.writeError(parser.MakeStaticError("Unused variable: "+string(v.Name), *v.DeclNode.Loc()))
+		}
+	}
+	et := make(types.ExprTypes)
+	ec := types.ErrCollector{}
+
+	types.PrepareTypes(node, et, lintingInfo.varAt)
+	types.Check(node, et, &ec)
+	for _, err := range ec.Errs {
 		e.writeError(err)
 	}
 }
