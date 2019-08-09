@@ -46,9 +46,7 @@ func findVariablesInFunc(node *ast.Function, info *LintingInfo, scope vScope) {
 }
 
 func findVariablesInLocal(node *ast.Local, info *LintingInfo, scope vScope) {
-	fmt.Println("FOOOO")
 	for _, bind := range node.Binds {
-		fmt.Printf("Bar %s\n", bind.Variable)
 		addVar(bind.Variable, node, bind.Body, info, scope, false)
 	}
 	for _, bind := range node.Binds {
