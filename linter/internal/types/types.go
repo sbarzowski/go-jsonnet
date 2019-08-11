@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/davecgh/go-spew/spew"
+
 	"github.com/fatih/color"
 
 	jsonnet "github.com/google/go-jsonnet"
@@ -62,16 +63,34 @@ func (o *objectDesc) widen(other *objectDesc) {
 	o.allFieldsKnown = o.allFieldsKnown || other.allFieldsKnown
 }
 
+type functionDesc struct {
+	resultContains []placeholderID
+
+	// TODO(sbarzowski) arity
+}
+
+func (f *functionDesc) widen(other *functionDesc) {
+	if other == nil {
+		return
+	}
+
+	f.resultContains = append(f.resultContains, other.resultContains...)
+}
+
 // TODO(sbarzowski) unexport this
 type TypeDesc struct {
 	Bool                 bool
 	Number               bool
 	String               bool
 	Null                 bool
-	Function             bool // TODO(sbarzowski) better rep
+	FunctionDesc         *functionDesc
 	ObjectDesc           *objectDesc
 	Array                bool
 	ArrayElementContains []placeholderID // TODO(sbarzowski) better rep
+}
+
+func (t *TypeDesc) Function() bool {
+	return t.FunctionDesc != nil
 }
 
 func (t *TypeDesc) Object() bool {
@@ -83,10 +102,10 @@ func voidTypeDesc() TypeDesc {
 }
 
 func Describe(t *TypeDesc) string {
-	if t.Bool && t.Number && t.String && t.Null && t.Function && t.Object() && t.Array {
+	if t.Bool && t.Number && t.String && t.Null && t.Function() && t.Object() && t.Array {
 		return "any"
 	}
-	if !t.Bool && !t.Number && !t.String && !t.Null && !t.Function && !t.Object() && !t.Array {
+	if !t.Bool && !t.Number && !t.String && !t.Null && !t.Function() && !t.Object() && !t.Array {
 		return "void"
 	}
 	parts := []string{}
@@ -102,7 +121,7 @@ func Describe(t *TypeDesc) string {
 	if t.Null {
 		parts = append(parts, "null")
 	}
-	if t.Function {
+	if t.Function() {
 		parts = append(parts, "function")
 	}
 	if t.Object() {
@@ -115,19 +134,25 @@ func Describe(t *TypeDesc) string {
 }
 
 func (a *TypeDesc) widen(b *TypeDesc) {
-	fmt.Println("Widening (", Describe(a), ") (", Describe(b), ")")
-
 	a.Bool = a.Bool || b.Bool
 	a.Number = a.Number || b.Number
 	a.String = a.String || b.String
 	a.Null = a.Null || b.Null
-	a.Function = a.Function || b.Function
+
+	if a.FunctionDesc != nil {
+		a.FunctionDesc.widen(b.FunctionDesc)
+	} else if a.FunctionDesc == nil && b.FunctionDesc != nil {
+		copy := *b.FunctionDesc
+		a.FunctionDesc = &copy
+	}
+
 	if a.ObjectDesc != nil {
 		a.ObjectDesc.widen(b.ObjectDesc)
 	} else if a.ObjectDesc == nil && b.ObjectDesc != nil {
 		copy := *b.ObjectDesc
 		a.ObjectDesc = &copy
 	}
+
 	a.Array = a.Array || b.Array
 	a.ArrayElementContains = append(a.ArrayElementContains, b.ArrayElementContains...)
 }
@@ -139,6 +164,7 @@ type stronglyConnectedComponentID int
 var noType placeholderID
 var anyType placeholderID = 1
 var anyObjectType placeholderID = 2
+var anyFunctionType placeholderID = 3
 
 type indexSpec struct {
 	indexed placeholderID
@@ -147,6 +173,7 @@ type indexSpec struct {
 	stringIndex string
 
 	knownStringIndex bool
+	functionIndex    bool
 }
 
 func unknownIndexSpec(indexed placeholderID) *indexSpec {
@@ -157,19 +184,62 @@ func unknownIndexSpec(indexed placeholderID) *indexSpec {
 	}
 }
 
-func unknownObjectIndex(indexed placeholderID) *indexSpec {
-	return &indexSpec{
-		indexed:          indexed,
-		stringIndex:      "",
-		knownStringIndex: false,
-	}
-}
-
 func knownObjectIndex(indexed placeholderID, index string) *indexSpec {
 	return &indexSpec{
 		indexed:          indexed,
-		stringIndex:      "",
+		stringIndex:      index,
 		knownStringIndex: true,
+	}
+}
+
+func functionCallIndex(function placeholderID) *indexSpec {
+	return &indexSpec{
+		indexed:       function,
+		functionIndex: true,
+	}
+}
+
+type elementDesc struct {
+	genericIndex placeholderID
+	stringIndex  map[string]placeholderID
+	callIndex    placeholderID
+}
+
+func (g *typeGraph) getOrCreateElementType(target placeholderID, index *indexSpec) (bool, placeholderID) {
+	// In case there was no previous indexing
+	if g.elementType[target] == nil {
+		g.elementType[target] = &elementDesc{}
+	}
+
+	elementType := g.elementType[target]
+
+	created := false
+
+	// Actual specific indexing depening on the index type
+	if index.knownStringIndex {
+		if elementType.stringIndex == nil {
+			elementType.stringIndex = make(map[string]placeholderID)
+		}
+		if elementType.stringIndex[index.stringIndex] == noType {
+			created = true
+			elID := g.newPlaceholder()
+			elementType.stringIndex[index.stringIndex] = elID
+			return created, elID
+		} else {
+			return created, elementType.stringIndex[index.stringIndex]
+		}
+	} else if index.functionIndex {
+		if elementType.callIndex == noType {
+			created = true
+			elementType.callIndex = g.newPlaceholder()
+		}
+		return created, elementType.callIndex
+	} else {
+		if elementType.genericIndex == noType {
+			created = true
+			elementType.genericIndex = g.newPlaceholder()
+		}
+		return created, elementType.genericIndex
 	}
 }
 
@@ -189,7 +259,9 @@ type typeGraph struct {
 	topoOrder []placeholderID
 	sccOf     []stronglyConnectedComponentID
 
-	elementType []placeholderID
+	elementType []*elementDesc
+	// elementType            []placeholderID
+	// stringIndexElementType []map[string]placeholderID
 
 	upperBound []TypeDesc
 
@@ -203,52 +275,71 @@ func (g *typeGraph) placeholder(id placeholderID) *typePlaceholder {
 
 func (g *typeGraph) newPlaceholder() placeholderID {
 	g._placeholders = append(g._placeholders, typePlaceholder{})
-	g.elementType = append(g.elementType, noType)
+	g.elementType = append(g.elementType, nil)
+
 	return placeholderID(len(g._placeholders) - 1)
 }
 
 func (g *typeGraph) separateElementTypes() {
-
 	var getElementType func(container placeholderID, index *indexSpec) placeholderID
 	getElementType = func(container placeholderID, index *indexSpec) placeholderID {
 		c := g.placeholder(container)
-		if g.elementType[container] == noType {
-			elID := g.newPlaceholder()
-			g.elementType[container] = elID
+		created, elID := g.getOrCreateElementType(container, index)
 
-			el := g.placeholder(elID)
+		if !created {
+			return elID
+		}
 
-			// Now we need to put all the stuff into element type
+		indexType := "[]"
+		if index.functionIndex {
+			indexType = "()"
+		}
 
-			if c.index != nil {
-				// We need to go deeper
-				// Our container c is itself the result of indexing
-				// So we need to get the element type of the element type
-				// of our container's container
-				elel := getElementType(c.index.indexed, c.index)
-				el.contains = append(el.contains, getElementType(elel, index))
+		// Now we need to put all the stuff into element type
+		el := typePlaceholder{}
+
+		// Direct indexing
+		if index.knownStringIndex {
+			if c.concrete.Object() {
+				el.contains = append(el.contains, c.concrete.ObjectDesc.allContain...)
+				el.contains = append(el.contains, c.concrete.ObjectDesc.fieldContains[index.stringIndex]...)
+			}
+			// TODO(sbarzowski) but here we need to save the right element type, not the generic one
+		} else if index.functionIndex {
+			if c.concrete.Function() {
+				el.contains = append(el.contains, c.concrete.FunctionDesc.resultContains...)
+			}
+		} else {
+			// TODO(sbarzowski) performance issues when the object is big
+			if c.concrete.Object() {
+				el.contains = append(el.contains, c.concrete.ObjectDesc.allContain...)
+				for _, placeholders := range c.concrete.ObjectDesc.fieldContains {
+					el.contains = append(el.contains, placeholders...)
+				}
 			}
 
-			if index.knownStringIndex {
-				panic("TODO")
-			} else {
-				if c.concrete.Object() {
-					el.contains = append(el.contains, c.concrete.ObjectDesc.allContain...)
-					for _, placeholders := range c.concrete.ObjectDesc.fieldContains {
-						el.contains = append(el.contains, placeholders...)
-					}
-				}
-
-				for _, p := range c.concrete.ArrayElementContains {
-					el.contains = append(el.contains, p)
-				}
-			}
-
-			for _, contained := range c.contains {
-				el.contains = append(el.contains, getElementType(contained, index))
+			for _, p := range c.concrete.ArrayElementContains {
+				el.contains = append(el.contains, p)
 			}
 		}
-		return g.elementType[container]
+
+		// The indexed thing may itself be indexing something, so we need to go deeper
+		if c.index != nil {
+			elInC := getElementType(c.index.indexed, c.index)
+			el.contains = append(el.contains, getElementType(elInC, index))
+		}
+
+		// The indexed thing may contain other values, we need to index those as well
+		for _, contained := range c.contains {
+			el.contains = append(el.contains, getElementType(contained, index))
+		}
+
+		fmt.Println("---------------------------------------\ngetElementType", container, "->", elID, indexType)
+		spew.Dump(el)
+
+		g._placeholders[elID] = el
+
+		return elID
 	}
 
 	for i := range g._placeholders {
@@ -256,16 +347,12 @@ func (g *typeGraph) separateElementTypes() {
 		if index != nil {
 			fmt.Println("Removing explicit indexing", i, "indexed", index.indexed)
 			el := getElementType(index.indexed, index)
+			fmt.Println("Index type of", i, "indexing", index.indexed, "is", el)
 			// We carefully take a new pointer here, because getElementType might have reallocated it
 			tp := &g._placeholders[i]
 			tp.index = nil
 			tp.contains = append(tp.contains, el)
-			fmt.Println("New index", tp.index)
 		}
-	}
-
-	for i := range g._placeholders {
-		spew.Dump(&g._placeholders[i])
 	}
 }
 
@@ -278,7 +365,6 @@ func (g *typeGraph) makeTopoOrder() {
 	visit = func(p placeholderID) {
 		visited[p] = true
 		for _, child := range g.placeholder(p).contains {
-			fmt.Printf("%d -> %d\n", p, child)
 			if !visited[child] {
 				visit(child)
 			}
@@ -291,7 +377,6 @@ func (g *typeGraph) makeTopoOrder() {
 			visit(placeholderID(i))
 		}
 	}
-	spew.Dump(g.topoOrder)
 }
 
 func (g *typeGraph) findTypes() {
@@ -301,7 +386,6 @@ func (g *typeGraph) findTypes() {
 			dependentOn[dependency] = append(dependentOn[dependency], placeholderID(i))
 		}
 	}
-	spew.Dump(dependentOn)
 
 	visited := make([]bool, len(g._placeholders))
 	g.sccOf = make([]stronglyConnectedComponentID, len(g._placeholders))
@@ -336,26 +420,28 @@ func (g *typeGraph) findTypes() {
 		scc := stronglyConnectedComponents[i]
 		g.resolveTypesInSCC(scc)
 	}
+	for i, p := range g._placeholders {
+		for _, contained := range p.contains {
+			fmt.Println(i, "contains", contained)
+		}
+	}
+	fmt.Println("topoOrder:", g.topoOrder)
 }
 
 func (g *typeGraph) resolveTypesInSCC(scc []placeholderID) {
 	sccID := g.sccOf[scc[0]]
 
-	fmt.Println("-------------------------------------------\nStrongly connected component")
-	spew.Dump(scc)
-
 	common := voidTypeDesc()
+
+	fmt.Println("======= resolving SCC: ", scc)
 
 	for _, p := range scc {
 		for _, contained := range g.placeholder(p).contains {
 			if g.sccOf[contained] != sccID {
 				common.widen(&g.upperBound[contained])
-				fmt.Println("widening with:", contained, "result:", Describe(&common))
 			}
 		}
 	}
-
-	fmt.Println("common:", Describe(&common))
 
 	for _, p := range scc {
 		common.widen(&g.placeholder(p).concrete)
@@ -364,10 +450,10 @@ func (g *typeGraph) resolveTypesInSCC(scc []placeholderID) {
 		}
 	}
 
-	fmt.Println("final:", Describe(&common))
-
 	for _, p := range scc {
 		g.upperBound[p] = common
+		// fmt.Println("----------------------------------------------------\n", p, Describe(&g.upperBound[p]))
+		// spew.Dump(g.upperBound[p])
 	}
 }
 
@@ -384,6 +470,14 @@ func tpSum(p1, p2 placeholderID) typePlaceholder {
 	}
 }
 
+func tpIndex(index *indexSpec) typePlaceholder {
+	return typePlaceholder{
+		concrete: voidTypeDesc(),
+		contains: nil,
+		index:    index,
+	}
+}
+
 func tpRef(p placeholderID) typePlaceholder {
 	return typePlaceholder{
 		contains: []placeholderID{p},
@@ -396,9 +490,7 @@ func prepareTPWithPlaceholder(node ast.Node, g *typeGraph, p placeholderID) {
 		bindPlaceholders := make([]placeholderID, len(node.Binds))
 		for i := range node.Binds {
 			bindPlaceholders[i] = g.newPlaceholder()
-			fmt.Println("placeholder for bind", bindPlaceholders[i])
 			g.exprPlaceholder[node.Binds[i].Body] = bindPlaceholders[i]
-			fmt.Println("exprPlaceholder len =", len(g.exprPlaceholder))
 		}
 		for i := range node.Binds {
 			// TODO(sbarzowski) what about func? is desugaring allowing us to avoid that
@@ -480,10 +572,11 @@ func calcTP(node ast.Node, g *typeGraph) typePlaceholder {
 	case *ast.Index:
 		// indexType := typeOf[node.Index]
 		// TODO
-		return typePlaceholder{
-			concrete: voidTypeDesc(),
-			contains: nil,
-			index:    unknownIndexSpec(g.exprPlaceholder[node.Target]),
+		switch index := node.Index.(type) {
+		case *ast.LiteralString:
+			return tpIndex(knownObjectIndex(g.exprPlaceholder[node.Target], index.Value))
+		default:
+			return tpIndex(unknownIndexSpec(g.exprPlaceholder[node.Target]))
 		}
 	case *ast.Import:
 		// complicated
@@ -512,10 +605,11 @@ func calcTP(node ast.Node, g *typeGraph) typePlaceholder {
 		return concreteTP(TypeDesc{Bool: true})
 	case *ast.Function:
 		// TODO(sbarzowski) more fancy description of functions...
-		return concreteTP(TypeDesc{Function: true})
+		return concreteTP(TypeDesc{FunctionDesc: &functionDesc{
+			resultContains: []placeholderID{anyType}, // TODO(sbarzowski) this
+		}})
 	case *ast.Apply:
-		// Can't do anything, until we have a better description of function types
-		return tpRef(anyType)
+		return tpIndex(functionCallIndex(g.exprPlaceholder[node.Target]))
 	}
 	panic(fmt.Sprintf("Unexpected %t", node))
 }
@@ -533,6 +627,10 @@ func PrepareTypes(node ast.Node, typeOf ExprTypes, varAt map[ast.Node]*common.Va
 		allContain:     []placeholderID{anyType},
 	}
 
+	anyFunctionDesc := &functionDesc{
+		resultContains: []placeholderID{anyType},
+	}
+
 	// Create the "no-type" sentinel placeholder
 	g.newPlaceholder()
 
@@ -543,7 +641,7 @@ func PrepareTypes(node ast.Node, typeOf ExprTypes, varAt map[ast.Node]*common.Va
 		Number:               true,
 		String:               true,
 		Null:                 true,
-		Function:             true,
+		FunctionDesc:         anyFunctionDesc,
 		ObjectDesc:           anyObjectDesc,
 		Array:                true,
 		ArrayElementContains: []placeholderID{anyType},
@@ -554,11 +652,15 @@ func PrepareTypes(node ast.Node, typeOf ExprTypes, varAt map[ast.Node]*common.Va
 		ObjectDesc: anyObjectDesc,
 	})
 
+	g.newPlaceholder()
+	g._placeholders[anyFunctionType] = concreteTP(TypeDesc{
+		FunctionDesc: anyFunctionDesc,
+	})
+
 	prepareTP(node, &g)
 	g.separateElementTypes()
 	g.makeTopoOrder()
 	g.findTypes()
-	spew.Dump(g.upperBound)
 	for e, p := range g.exprPlaceholder {
 		// TODO(sbarzowski) using errors for debugging, ugh
 		lf := jsonnet.LinterFormatter()
@@ -596,7 +698,7 @@ func Check(node ast.Node, typeOf ExprTypes, ec *ErrCollector) {
 	switch node := node.(type) {
 	case *ast.Apply:
 		t := typeOf[node.Target]
-		if !t.Function {
+		if !t.Function() {
 			ec.staticErr("Called value must be a function, but it is assumed to be "+Describe(&t), node.Loc())
 		}
 	case *ast.Index:
@@ -623,6 +725,14 @@ func Check(node ast.Node, typeOf ExprTypes, ec *ErrCollector) {
 			// It's not an array so it must be an object
 			if !indexType.String {
 				ec.staticErr("Indexed value is assumed to be an object, but index is not a string", node.Loc())
+			}
+			if targetType.ObjectDesc.allFieldsKnown {
+				switch indexNode := node.Index.(type) {
+				case *ast.LiteralString:
+					if _, hasField := targetType.ObjectDesc.fieldContains[indexNode.Value]; !hasField {
+						ec.staticErr(fmt.Sprintf("Indexed object has no field %#v", indexNode.Value), node.Loc())
+					}
+				}
 			}
 		} else if !indexType.Number && !indexType.String {
 			// We don't know what the target is, but we sure cannot index it with that
