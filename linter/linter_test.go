@@ -81,7 +81,7 @@ func TestLinter(t *testing.T) {
 			continue
 		}
 		name := jsonnetExtRE.ReplaceAllString(input, "")
-		golden := jsonnetExtRE.ReplaceAllString(input, ".golden")
+		golden := jsonnetExtRE.ReplaceAllString(input, ".linter.golden")
 		tests = append(tests, &linterTest{
 			name:   name,
 			input:  input,
