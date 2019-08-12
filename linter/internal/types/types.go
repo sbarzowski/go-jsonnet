@@ -89,6 +89,14 @@ type TypeDesc struct {
 	ArrayElementContains []placeholderID // TODO(sbarzowski) better rep
 }
 
+func (t *TypeDesc) Any() bool {
+	return t.Bool && t.Number && t.String && t.Null && t.Function() && t.Object() && t.Array
+}
+
+func (t *TypeDesc) Void() bool {
+	return !t.Bool && !t.Number && !t.String && !t.Null && !t.Function() && !t.Object() && !t.Array
+}
+
 func (t *TypeDesc) Function() bool {
 	return t.FunctionDesc != nil
 }
@@ -102,10 +110,10 @@ func voidTypeDesc() TypeDesc {
 }
 
 func Describe(t *TypeDesc) string {
-	if t.Bool && t.Number && t.String && t.Null && t.Function() && t.Object() && t.Array {
+	if t.Any() {
 		return "any"
 	}
-	if !t.Bool && !t.Number && !t.String && !t.Null && !t.Function() && !t.Object() && !t.Array {
+	if t.Void() {
 		return "void"
 	}
 	parts := []string{}
@@ -163,8 +171,12 @@ type stronglyConnectedComponentID int
 // 0 value for placeholderID acting as "nil" for placeholders
 var noType placeholderID
 var anyType placeholderID = 1
-var anyObjectType placeholderID = 2
-var anyFunctionType placeholderID = 3
+var boolType placeholderID = 2
+var numberType placeholderID = 3
+var stringType placeholderID = 4
+var nullType placeholderID = 5
+var anyObjectType placeholderID = 6
+var anyFunctionType placeholderID = 7
 
 type indexSpec struct {
 	indexed placeholderID
@@ -215,7 +227,7 @@ func (g *typeGraph) getOrCreateElementType(target placeholderID, index *indexSpe
 
 	created := false
 
-	// Actual specific indexing depening on the index type
+	// Actual specific indexing depending on the index type
 	if index.knownStringIndex {
 		if elementType.stringIndex == nil {
 			elementType.stringIndex = make(map[string]placeholderID)
@@ -240,6 +252,18 @@ func (g *typeGraph) getOrCreateElementType(target placeholderID, index *indexSpe
 			elementType.genericIndex = g.newPlaceholder()
 		}
 		return created, elementType.genericIndex
+	}
+}
+
+func (g *typeGraph) setElementType(target placeholderID, index *indexSpec, newID placeholderID) {
+	elementType := g.elementType[target]
+
+	if index.knownStringIndex {
+		elementType.stringIndex[index.stringIndex] = newID
+	} else if index.functionIndex {
+		elementType.callIndex = newID
+	} else {
+		elementType.genericIndex = newID
 	}
 }
 
@@ -280,6 +304,40 @@ func (g *typeGraph) newPlaceholder() placeholderID {
 	return placeholderID(len(g._placeholders) - 1)
 }
 
+// simplifyReferences removes indirection through simple references, i.e. placeholders which contain
+// exactly one other placeholder and which don't add anything else.
+func (g *typeGraph) simplifyReferences() {
+	mapping := make([]placeholderID, len(g._placeholders))
+	for i, p := range g._placeholders {
+		if p.concrete.Void() && p.index == nil && len(p.contains) == 1 {
+			mapping[i] = p.contains[0]
+		} else {
+			mapping[i] = placeholderID(i)
+		}
+	}
+
+	// transitive closure
+	for i := range mapping {
+		if mapping[mapping[i]] != mapping[i] {
+			mapping[i] = mapping[mapping[i]]
+		}
+	}
+
+	for i := range g._placeholders {
+		p := g.placeholder(placeholderID(i))
+		for j := range p.contains {
+			p.contains[j] = mapping[p.contains[j]]
+		}
+		if p.index != nil {
+			p.index.indexed = mapping[p.index.indexed]
+		}
+	}
+
+	for k := range g.exprPlaceholder {
+		g.exprPlaceholder[k] = mapping[g.exprPlaceholder[k]]
+	}
+}
+
 func (g *typeGraph) separateElementTypes() {
 	var getElementType func(container placeholderID, index *indexSpec) placeholderID
 	getElementType = func(container placeholderID, index *indexSpec) placeholderID {
@@ -296,48 +354,55 @@ func (g *typeGraph) separateElementTypes() {
 		}
 
 		// Now we need to put all the stuff into element type
-		el := typePlaceholder{}
+		contains := make([]placeholderID, 0, 1)
 
 		// Direct indexing
 		if index.knownStringIndex {
 			if c.concrete.Object() {
-				el.contains = append(el.contains, c.concrete.ObjectDesc.allContain...)
-				el.contains = append(el.contains, c.concrete.ObjectDesc.fieldContains[index.stringIndex]...)
+				contains = append(contains, c.concrete.ObjectDesc.allContain...)
+				contains = append(contains, c.concrete.ObjectDesc.fieldContains[index.stringIndex]...)
 			}
 			// TODO(sbarzowski) but here we need to save the right element type, not the generic one
 		} else if index.functionIndex {
 			if c.concrete.Function() {
-				el.contains = append(el.contains, c.concrete.FunctionDesc.resultContains...)
+				contains = append(contains, c.concrete.FunctionDesc.resultContains...)
 			}
 		} else {
 			// TODO(sbarzowski) performance issues when the object is big
 			if c.concrete.Object() {
-				el.contains = append(el.contains, c.concrete.ObjectDesc.allContain...)
+				contains = append(contains, c.concrete.ObjectDesc.allContain...)
 				for _, placeholders := range c.concrete.ObjectDesc.fieldContains {
-					el.contains = append(el.contains, placeholders...)
+					contains = append(contains, placeholders...)
 				}
 			}
 
 			for _, p := range c.concrete.ArrayElementContains {
-				el.contains = append(el.contains, p)
+				contains = append(contains, p)
 			}
 		}
 
 		// The indexed thing may itself be indexing something, so we need to go deeper
 		if c.index != nil {
 			elInC := getElementType(c.index.indexed, c.index)
-			el.contains = append(el.contains, getElementType(elInC, index))
+			contains = append(contains, getElementType(elInC, index))
 		}
 
 		// The indexed thing may contain other values, we need to index those as well
 		for _, contained := range c.contains {
-			el.contains = append(el.contains, getElementType(contained, index))
+			contains = append(contains, getElementType(contained, index))
 		}
 
 		fmt.Println("---------------------------------------\ngetElementType", container, "->", elID, indexType)
-		spew.Dump(el)
+		spew.Dump(contains)
 
-		g._placeholders[elID] = el
+		g._placeholders[elID].contains = contains
+
+		// Immediate path compression
+		// TODO(sbarzowski) test which checks deep and recursive structure
+		if len(contains) == 1 {
+			g.setElementType(container, index, contains[0])
+			return contains[0]
+		}
 
 		return elID
 	}
@@ -582,15 +647,15 @@ func calcTP(node ast.Node, g *typeGraph) typePlaceholder {
 		// complicated
 		return tpRef(anyType)
 	case *ast.LiteralBoolean:
-		return concreteTP(TypeDesc{Bool: true})
+		return tpRef(boolType)
 	case *ast.LiteralNull:
-		return concreteTP(TypeDesc{Null: true})
+		return tpRef(nullType)
 
 	case *ast.LiteralNumber:
-		return concreteTP(TypeDesc{Number: true})
+		return tpRef(numberType)
 
 	case *ast.LiteralString:
-		return concreteTP(TypeDesc{String: true})
+		return tpRef(stringType)
 
 	case *ast.Local:
 		// TODO(sbarzowski) perhaps it should return the id and any creation of the new placeholders would happend in this function
@@ -602,11 +667,12 @@ func calcTP(node ast.Node, g *typeGraph) typePlaceholder {
 	case *ast.SuperIndex:
 		return tpRef(anyObjectType)
 	case *ast.InSuper:
-		return concreteTP(TypeDesc{Bool: true})
+		return tpRef(boolType)
 	case *ast.Function:
 		// TODO(sbarzowski) more fancy description of functions...
+		fmt.Println("Body", g.exprPlaceholder[node.Body])
 		return concreteTP(TypeDesc{FunctionDesc: &functionDesc{
-			resultContains: []placeholderID{anyType}, // TODO(sbarzowski) this
+			resultContains: []placeholderID{g.exprPlaceholder[node.Body]},
 		}})
 	case *ast.Apply:
 		return tpIndex(functionCallIndex(g.exprPlaceholder[node.Target]))
@@ -648,6 +714,26 @@ func PrepareTypes(node ast.Node, typeOf ExprTypes, varAt map[ast.Node]*common.Va
 	})
 
 	g.newPlaceholder()
+	g._placeholders[boolType] = concreteTP(TypeDesc{
+		Bool: true,
+	})
+
+	g.newPlaceholder()
+	g._placeholders[numberType] = concreteTP(TypeDesc{
+		Number: true,
+	})
+
+	g.newPlaceholder()
+	g._placeholders[stringType] = concreteTP(TypeDesc{
+		String: true,
+	})
+
+	g.newPlaceholder()
+	g._placeholders[nullType] = concreteTP(TypeDesc{
+		Null: true,
+	})
+
+	g.newPlaceholder()
 	g._placeholders[anyObjectType] = concreteTP(TypeDesc{
 		ObjectDesc: anyObjectDesc,
 	})
@@ -658,6 +744,9 @@ func PrepareTypes(node ast.Node, typeOf ExprTypes, varAt map[ast.Node]*common.Va
 	})
 
 	prepareTP(node, &g)
+
+	g.simplifyReferences()
+
 	g.separateElementTypes()
 	g.makeTopoOrder()
 	g.findTypes()
