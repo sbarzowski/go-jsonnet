@@ -90,6 +90,7 @@ type TypeDesc struct {
 }
 
 func (t *TypeDesc) Any() bool {
+	// TODO(sbarzowski) BUG - must check that function, object and array allow any values
 	return t.Bool && t.Number && t.String && t.Null && t.Function() && t.Object() && t.Array
 }
 

@@ -61,6 +61,7 @@ func runTest(t *testing.T, test *linterTest) {
 		}
 	}
 }
+
 func TestLinter(t *testing.T) {
 	flag.Parse()
 

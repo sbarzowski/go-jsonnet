@@ -286,8 +286,8 @@ func specialChildren(node ast.Node) []ast.Node {
 	case *ast.Error:
 		return nil
 	case *ast.Function:
-		// TODO(sbarzowski) this
-		return nil
+		// TODO(sbarzowski) test this
+		return []ast.Node{node.Body}
 	case *ast.Import:
 		return nil
 	case *ast.ImportStr:

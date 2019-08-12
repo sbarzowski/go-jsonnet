@@ -214,29 +214,6 @@ func runJsonnet(i jsonnetInput) jsonnetResult {
 	return runInternalJsonnet(i)
 }
 
-func CompareGolden(result string, golden []byte) (string, bool) {
-	if !bytes.Equal(golden, []byte(result)) {
-		// TODO(sbarzowski) better reporting of differences in whitespace
-		// missing newline issues can be very subtle now
-		return diff(result, string(golden)), true
-	}
-	return "", false
-}
-
-func WriteFile(path string, content []byte, mode os.FileMode) (changed bool, err error) {
-	old, err := ioutil.ReadFile(path)
-	if err != nil && !os.IsNotExist(err) {
-		return false, err
-	}
-	if bytes.Equal(old, content) && !os.IsNotExist(err) {
-		return false, nil
-	}
-	if err := ioutil.WriteFile(path, content, mode); err != nil {
-		return false, err
-	}
-	return true, nil
-}
-
 func compareSingleGolden(path string, result jsonnetResult) []error {
 	if result.outputMulti != nil {
 		return []error{fmt.Errorf("outputMulti is populated in a single-file test for %v", path)}
