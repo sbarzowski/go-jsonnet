@@ -1,0 +1,8 @@
+../testdata/optional_args4:(1:1)-(4:14) Unused variable: x
+
+local x = 1;
+local foo(x=2, y=3, z=x) = {x: x, y: y, z: z};
+local x = 4;
+foo(x=5, y=x)
+
+

@@ -2,14 +2,8 @@ package types
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
-	"github.com/davecgh/go-spew/spew"
-
-	"github.com/fatih/color"
-
-	jsonnet "github.com/google/go-jsonnet"
 	"github.com/google/go-jsonnet/ast"
 	"github.com/google/go-jsonnet/linter/internal/common"
 	"github.com/google/go-jsonnet/parser"
@@ -349,11 +343,6 @@ func (g *typeGraph) separateElementTypes() {
 			return elID
 		}
 
-		indexType := "[]"
-		if index.functionIndex {
-			indexType = "()"
-		}
-
 		// Now we need to put all the stuff into element type
 		contains := make([]placeholderID, 0, 1)
 
@@ -393,9 +382,6 @@ func (g *typeGraph) separateElementTypes() {
 			contains = append(contains, getElementType(contained, index))
 		}
 
-		fmt.Println("---------------------------------------\ngetElementType", container, "->", elID, indexType)
-		spew.Dump(contains)
-
 		g._placeholders[elID].contains = contains
 
 		// Immediate path compression
@@ -411,9 +397,7 @@ func (g *typeGraph) separateElementTypes() {
 	for i := range g._placeholders {
 		index := g.placeholder(placeholderID(i)).index
 		if index != nil {
-			fmt.Println("Removing explicit indexing", i, "indexed", index.indexed)
 			el := getElementType(index.indexed, index)
-			fmt.Println("Index type of", i, "indexing", index.indexed, "is", el)
 			// We carefully take a new pointer here, because getElementType might have reallocated it
 			tp := &g._placeholders[i]
 			tp.index = nil
@@ -486,20 +470,12 @@ func (g *typeGraph) findTypes() {
 		scc := stronglyConnectedComponents[i]
 		g.resolveTypesInSCC(scc)
 	}
-	for i, p := range g._placeholders {
-		for _, contained := range p.contains {
-			fmt.Println(i, "contains", contained)
-		}
-	}
-	fmt.Println("topoOrder:", g.topoOrder)
 }
 
 func (g *typeGraph) resolveTypesInSCC(scc []placeholderID) {
 	sccID := g.sccOf[scc[0]]
 
 	common := voidTypeDesc()
-
-	fmt.Println("======= resolving SCC: ", scc)
 
 	for _, p := range scc {
 		for _, contained := range g.placeholder(p).contains {
@@ -518,8 +494,6 @@ func (g *typeGraph) resolveTypesInSCC(scc []placeholderID) {
 
 	for _, p := range scc {
 		g.upperBound[p] = common
-		// fmt.Println("----------------------------------------------------\n", p, Describe(&g.upperBound[p]))
-		// spew.Dump(g.upperBound[p])
 	}
 }
 
@@ -551,6 +525,9 @@ func tpRef(p placeholderID) typePlaceholder {
 }
 
 func prepareTPWithPlaceholder(node ast.Node, g *typeGraph, p placeholderID) {
+	if node == nil {
+		panic("Node cannot be nil")
+	}
 	switch node := node.(type) {
 	case *ast.Local:
 		bindPlaceholders := make([]placeholderID, len(node.Binds))
@@ -565,6 +542,9 @@ func prepareTPWithPlaceholder(node ast.Node, g *typeGraph, p placeholderID) {
 		prepareTP(node.Body, g)
 	default:
 		for _, child := range parser.Children(node) {
+			if child == nil {
+				panic("Bug - child cannot be nil")
+			}
 			prepareTP(child, g)
 		}
 	}
@@ -572,6 +552,9 @@ func prepareTPWithPlaceholder(node ast.Node, g *typeGraph, p placeholderID) {
 }
 
 func prepareTP(node ast.Node, g *typeGraph) {
+	if node == nil {
+		panic("Node cannot be nil")
+	}
 	p := g.newPlaceholder()
 	g.exprPlaceholder[node] = p
 	prepareTPWithPlaceholder(node, g, p)
@@ -589,14 +572,11 @@ func calcTP(node ast.Node, g *typeGraph) typePlaceholder {
 		// complicated
 		return tpRef(anyType)
 	case *ast.Unary:
-		// complicated
 		switch node.Op {
 		case ast.UopNot:
-			return concreteTP(TypeDesc{Bool: true})
-		case ast.UopBitwiseNot:
-		case ast.UopPlus:
-		case ast.UopMinus:
-			return concreteTP(TypeDesc{Number: true})
+			return tpRef(boolType)
+		case ast.UopBitwiseNot, ast.UopPlus, ast.UopMinus:
+			return tpRef(numberType)
 		default:
 			panic(fmt.Sprintf("Unrecognized unary operator %v", node.Op))
 		}
@@ -647,6 +627,9 @@ func calcTP(node ast.Node, g *typeGraph) typePlaceholder {
 	case *ast.Import:
 		// complicated
 		return tpRef(anyType)
+	case *ast.ImportStr:
+		// complicated
+		return tpRef(stringType)
 	case *ast.LiteralBoolean:
 		return tpRef(boolType)
 	case *ast.LiteralNull:
@@ -671,14 +654,13 @@ func calcTP(node ast.Node, g *typeGraph) typePlaceholder {
 		return tpRef(boolType)
 	case *ast.Function:
 		// TODO(sbarzowski) more fancy description of functions...
-		fmt.Println("Body", g.exprPlaceholder[node.Body])
 		return concreteTP(TypeDesc{FunctionDesc: &functionDesc{
 			resultContains: []placeholderID{g.exprPlaceholder[node.Body]},
 		}})
 	case *ast.Apply:
 		return tpIndex(functionCallIndex(g.exprPlaceholder[node.Target]))
 	}
-	panic(fmt.Sprintf("Unexpected %t", node))
+	panic(fmt.Sprintf("Unexpected %#v", node))
 }
 
 type ExprTypes map[ast.Node]TypeDesc
@@ -753,12 +735,12 @@ func PrepareTypes(node ast.Node, typeOf ExprTypes, varAt map[ast.Node]*common.Va
 	g.findTypes()
 	for e, p := range g.exprPlaceholder {
 		// TODO(sbarzowski) using errors for debugging, ugh
-		lf := jsonnet.LinterFormatter()
-		lf.SetColorFormatter(color.New(color.FgRed).Fprintf)
-		fmt.Fprintf(os.Stderr, lf.Format(parser.StaticError{
-			Loc: *e.Loc(),
-			Msg: fmt.Sprintf("placeholder %d is %s", p, Describe(&g.upperBound[p])),
-		}))
+		// lf := jsonnet.LinterFormatter()
+		// lf.SetColorFormatter(color.New(color.FgRed).Fprintf)
+		// fmt.Fprintf(os.Stderr, lf.Format(parser.StaticError{
+		// 	Loc: *e.Loc(),
+		// 	Msg: fmt.Sprintf("placeholder %d is %s", p, Describe(&g.upperBound[p])),
+		// }))
 
 		// TODO(sbarzowski) here we'll need to handle additional
 		typeOf[e] = g.upperBound[p]
@@ -794,8 +776,7 @@ func Check(node ast.Node, typeOf ExprTypes, ec *ErrCollector) {
 	case *ast.Index:
 		targetType := typeOf[node.Target]
 		indexType := typeOf[node.Index]
-		// spew.Dump(indexType)
-		// spew.Dump(targetType)
+
 		if !targetType.Array && !targetType.Object() && !targetType.String {
 			ec.staticErr("Indexed value is neither an array nor an object nor a string", node.Loc())
 		} else if !targetType.Object() {

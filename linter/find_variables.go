@@ -1,10 +1,6 @@
 package linter
 
 import (
-	"fmt"
-
-	"github.com/davecgh/go-spew/spew"
-
 	"github.com/google/go-jsonnet/ast"
 	"github.com/google/go-jsonnet/linter/internal/common"
 	"github.com/google/go-jsonnet/parser"
@@ -60,6 +56,23 @@ func findVariablesInLocal(node *ast.Local, info *LintingInfo, scope vScope) {
 	findVariables(node.Body, info, scope)
 }
 
+func findVariablesInObject(node *ast.DesugaredObject, info *LintingInfo, scopeOutside vScope) {
+	scopeInside := cloneScope(scopeOutside)
+	if scopeInside["$"] == nil {
+		addVar("$", node, node, info, scopeInside, false)
+	}
+	for _, local := range node.Locals {
+		addVar(local.Variable, node, local.Body, info, scopeInside, false)
+	}
+	for _, local := range node.Locals {
+		findVariables(local.Body, info, scopeInside)
+	}
+	for _, field := range node.Fields {
+		findVariables(field.Body, info, scopeInside)
+		findVariables(field.Name, info, scopeOutside)
+	}
+}
+
 func findVariables(node ast.Node, info *LintingInfo, scope vScope) {
 	switch node := node.(type) {
 	case *ast.Function:
@@ -68,11 +81,12 @@ func findVariables(node ast.Node, info *LintingInfo, scope vScope) {
 	case *ast.Local:
 		newScope := cloneScope(scope)
 		findVariablesInLocal(node, info, newScope)
+	case *ast.DesugaredObject:
+		newScope := cloneScope(scope)
+		findVariablesInObject(node, info, newScope)
 	case *ast.Var:
 		if v, ok := scope[node.Id]; ok {
-			fmt.Printf("USE %s\n", node.Id)
 			v.Occurences = append(v.Occurences, node)
-			spew.Dump(v)
 		} else {
 			panic("Undeclared variable " + string(node.Id) + " - it should be caught earlier")
 		}

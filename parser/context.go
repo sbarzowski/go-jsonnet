@@ -97,7 +97,7 @@ func directChildren(node ast.Node) []ast.Node {
 	case *ast.Object:
 		return objectFieldsDirectChildren(node.Fields)
 	case *ast.DesugaredObject:
-		return desugaredObjectFieldsDirectChildren(node.Fields)
+		return desugaredObjectDirectChildren(node)
 	case *ast.ArrayComp:
 		result := []ast.Node{}
 		spec := &node.Spec
@@ -246,23 +246,29 @@ func inObjectFieldsChildren(fields ast.ObjectFields) ast.Nodes {
 	return result
 }
 
-func desugaredObjectFieldsDirectChildren(fields ast.DesugaredObjectFields) ast.Nodes {
+func desugaredObjectDirectChildren(obj *ast.DesugaredObject) ast.Nodes {
 	result := ast.Nodes{}
-	for _, field := range fields {
+	for _, field := range obj.Fields {
+		if field.Name == nil {
+			panic("Name cannot be nil")
+		}
 		result = append(result, field.Name)
 	}
 	return result
 }
 
-func inDesugaredObjectFieldsChildren(fields ast.DesugaredObjectFields) ast.Nodes {
-	result := ast.Nodes{}
-	for _, field := range fields {
+func inDesugaredObjectSpecialChildren(obj *ast.DesugaredObject) ast.Nodes {
+	result := make([]ast.Node, 0, len(obj.Fields)+len(obj.Locals))
+	for _, field := range obj.Fields {
 		result = append(result, field.Body)
+	}
+	for _, local := range obj.Locals {
+		result = append(result, local.Body)
 	}
 	return result
 }
 
-// specialChildren returns children are neither direct nor thunked,
+// specialChildren returns children that are neither direct nor thunked,
 // e.g. object field body.
 // These nodes are evaluated in a different environment from their parent.
 //
@@ -287,6 +293,7 @@ func specialChildren(node ast.Node) []ast.Node {
 		return nil
 	case *ast.Function:
 		// TODO(sbarzowski) test this
+		// TODO(sbarzowski) default values
 		return []ast.Node{node.Body}
 	case *ast.Import:
 		return nil
@@ -312,7 +319,7 @@ func specialChildren(node ast.Node) []ast.Node {
 	case *ast.LiteralString:
 		return nil
 	case *ast.DesugaredObject:
-		return inDesugaredObjectFieldsChildren(node.Fields)
+		return inDesugaredObjectSpecialChildren(node)
 	case *ast.Object:
 		return inObjectFieldsChildren(node.Fields)
 	case *ast.ArrayComp:

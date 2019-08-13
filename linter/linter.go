@@ -56,6 +56,7 @@ func Lint(node ast.Node, e *ErrorWriter) {
 	}
 	for _, v := range lintingInfo.variables {
 		if len(v.Occurences) == 0 && !v.Param && !v.Stdlib && v.Name != "$" {
+			// TODO(sbarzowski) re-enable
 			e.writeError(parser.MakeStaticError("Unused variable: "+string(v.Name), *v.DeclNode.Loc()))
 		}
 	}

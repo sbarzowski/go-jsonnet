@@ -72,10 +72,15 @@ func TestLinter(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	matchRegular, err := filepath.Glob("../testdata/*.jsonnet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	match = append(match, matchRegular...)
+
 	jsonnetExtRE := regexp.MustCompile(`\.jsonnet$`)
 
 	for _, input := range match {
-		fmt.Println(input)
 		// Skip escaped filenames.
 		if strings.ContainsRune(input, '%') {
 			continue
