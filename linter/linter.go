@@ -41,11 +41,9 @@ func Lint(node ast.Node, e *ErrorWriter) {
 		varAt:     make(map[ast.Node]*common.Variable),
 	}
 	std := common.Variable{
-		Name:       "std",
-		DeclNode:   nil,
-		Occurences: nil,
-		Param:      false,
-		Stdlib:     true,
+		Name:         "std",
+		Occurences:   nil,
+		VariableKind: common.VarStdlib,
 	}
 	lintingInfo.variables = append(lintingInfo.variables, &std)
 	findVariables(node, &lintingInfo, vScope{"std": &std})
@@ -55,9 +53,9 @@ func Lint(node ast.Node, e *ErrorWriter) {
 		}
 	}
 	for _, v := range lintingInfo.variables {
-		if len(v.Occurences) == 0 && !v.Param && !v.Stdlib && v.Name != "$" {
+		if len(v.Occurences) == 0 && v.VariableKind == common.VarRegular && v.Name != "$" {
 			// TODO(sbarzowski) re-enable
-			e.writeError(parser.MakeStaticError("Unused variable: "+string(v.Name), *v.DeclNode.Loc()))
+			e.writeError(parser.MakeStaticError("Unused variable: "+string(v.Name), v.LocRange))
 		}
 	}
 	et := make(types.ExprTypes)

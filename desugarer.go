@@ -139,6 +139,7 @@ func desugarFields(nodeBase ast.NodeBase, fields *ast.ObjectFields, objLevel int
 			locals = append(locals, ast.LocalBind{
 				Variable: *field.Id,
 				Body:     ast.Clone(field.Expr2), // TODO(sbarzowski) not sure if clone is needed
+				LocRange: field.LocRange,
 			})
 		default:
 			panic(fmt.Sprintf("Unexpected object field kind %v", field.Kind))
@@ -231,8 +232,6 @@ func desugarForSpec(inside ast.Node, forSpec *ast.ForSpec, objLevel int) (ast.No
 func wrapInArray(inside ast.Node) ast.Node {
 	return &ast.Array{Elements: ast.Nodes{inside}}
 }
-
-
 
 func desugarArrayComp(comp *ast.ArrayComp, objLevel int) (ast.Node, error) {
 	err := desugar(&comp.Body, objLevel)

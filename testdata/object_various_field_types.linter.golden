@@ -1,17 +1,5 @@
-../testdata/object_various_field_types:(1:1)-(13:2) Unused variable: local_field
+../testdata/object_various_field_types:11:8-26 Unused variable: local_field
 
-{
-	identifier: true,
-	"str_double ' \n": true,
-	'str_single " \n': true,
-	|||
-		str_block \n
-	|||: true,
-	@"str_verbatim_double "" '' \n": true,
-	@'str_verbatim_single "" '' \n': true,
-	["expr, " + "as complex as you want"]: true,
 	local local_field = true,
-	assert true
-}
 
 

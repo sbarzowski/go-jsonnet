@@ -8,13 +8,13 @@ import (
 
 type vScope map[ast.Identifier]*common.Variable
 
-func addVar(name ast.Identifier, declNode ast.Node, bindNode ast.Node, info *LintingInfo, scope vScope, param bool) {
+func addVar(name ast.Identifier, loc ast.LocationRange, bindNode ast.Node, info *LintingInfo, scope vScope, varKind common.VariableKind) {
 	v := &common.Variable{
-		Name:       name,
-		DeclNode:   declNode,
-		BindNode:   bindNode,
-		Occurences: nil,
-		Param:      param,
+		Name:         name,
+		BindNode:     bindNode,
+		Occurences:   nil,
+		VariableKind: varKind,
+		LocRange:     loc,
 	}
 	info.variables = append(info.variables, v)
 	scope[name] = v
@@ -29,11 +29,12 @@ func cloneScope(oldScope vScope) vScope {
 }
 
 func findVariablesInFunc(node *ast.Function, info *LintingInfo, scope vScope) {
+	// TODO(sbarzowski) right location range
 	for _, param := range node.Parameters.Required {
-		addVar(param, node, nil, info, scope, true)
+		addVar(param, ast.LocationRange{}, nil, info, scope, common.VarParam)
 	}
 	for _, param := range node.Parameters.Optional {
-		addVar(param.Name, node, nil, info, scope, true)
+		addVar(param.Name, ast.LocationRange{}, nil, info, scope, common.VarParam)
 	}
 	for _, param := range node.Parameters.Optional {
 		findVariables(param.DefaultArg, info, scope)
@@ -43,7 +44,7 @@ func findVariablesInFunc(node *ast.Function, info *LintingInfo, scope vScope) {
 
 func findVariablesInLocal(node *ast.Local, info *LintingInfo, scope vScope) {
 	for _, bind := range node.Binds {
-		addVar(bind.Variable, node, bind.Body, info, scope, false)
+		addVar(bind.Variable, bind.LocRange, bind.Body, info, scope, common.VarRegular)
 	}
 	for _, bind := range node.Binds {
 		if bind.Fun != nil {
@@ -58,11 +59,11 @@ func findVariablesInLocal(node *ast.Local, info *LintingInfo, scope vScope) {
 
 func findVariablesInObject(node *ast.DesugaredObject, info *LintingInfo, scopeOutside vScope) {
 	scopeInside := cloneScope(scopeOutside)
-	if scopeInside["$"] == nil {
-		addVar("$", node, node, info, scopeInside, false)
-	}
+	// if scopeInside["$"] == nil {
+	// 	addVar("$", node, node, info, scopeInside, common.VarDollarObject)
+	// }
 	for _, local := range node.Locals {
-		addVar(local.Variable, node, local.Body, info, scopeInside, false)
+		addVar(local.Variable, local.LocRange, local.Body, info, scopeInside, common.VarRegular)
 	}
 	for _, local := range node.Locals {
 		findVariables(local.Body, info, scopeInside)

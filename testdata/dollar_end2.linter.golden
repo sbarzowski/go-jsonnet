@@ -1,5 +1,0 @@
-../testdata/dollar_end2:3:11-16 Indexed value is neither an array nor an object nor a string
-
-    bar: !$.foo
-
-

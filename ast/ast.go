@@ -400,6 +400,8 @@ type LocalBind struct {
 	Variable Identifier
 	Body     Node
 	Fun      *Function
+
+	LocRange LocationRange
 }
 
 // LocalBinds represents a LocalBind slice.
@@ -508,11 +510,12 @@ type ObjectField struct {
 	Params        *Parameters // If methodSugar == true then holds the params.
 	TrailingComma bool        // If methodSugar == true then remembers the trailing comma
 	Expr2, Expr3  Node        // In scope of the object (can see self).
+	LocRange      LocationRange
 }
 
 // ObjectFieldLocalNoMethod creates a non-method local object field.
-func ObjectFieldLocalNoMethod(id *Identifier, body Node) ObjectField {
-	return ObjectField{ObjectLocal, ObjectFieldVisible, false, false, nil, nil, id, nil, false, body, nil}
+func ObjectFieldLocalNoMethod(id *Identifier, body Node, loc LocationRange) ObjectField {
+	return ObjectField{ObjectLocal, ObjectFieldVisible, false, false, nil, nil, id, nil, false, body, nil, loc}
 }
 
 // ObjectFields represents an ObjectField slice.
@@ -536,6 +539,8 @@ type DesugaredObjectField struct {
 	Name      Node
 	Body      Node
 	PlusSuper bool
+
+	LocRange LocationRange
 }
 
 // DesugaredObjectFields represents a DesugaredObjectField slice.

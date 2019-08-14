@@ -1,8 +1,5 @@
-../testdata/optional_args2:(1:1)-(4:9) Unused variable: x
+../testdata/optional_args2:1:7-12 Unused variable: x
 
 local x = 1;
-local foo(x=2, y=3, z=x) = {x: x, y: y, z: z};
-local x = 4;
-foo(y=x)
 
 

@@ -2,8 +2,13 @@ package types
 
 import (
 	"fmt"
+	"os"
+	"sort"
 	"strings"
 
+	"github.com/fatih/color"
+
+	"github.com/google/go-jsonnet"
 	"github.com/google/go-jsonnet/ast"
 	"github.com/google/go-jsonnet/linter/internal/common"
 	"github.com/google/go-jsonnet/parser"
@@ -40,6 +45,33 @@ type SimpleTypeDesc struct {
 	Array    bool // TODO(sbarzowski) better rep
 }
 
+type placeholderIDs []placeholderID
+
+func (p placeholderIDs) Len() int           { return len(p) }
+func (p placeholderIDs) Swap(i, j int)      { p[i], p[j] = p[j], p[i] }
+func (p placeholderIDs) Less(i, j int) bool { return p[i] < p[j] }
+
+func normalizePlaceholders(placeholders []placeholderID) []placeholderID {
+	if len(placeholders) == 0 {
+		return placeholders
+	}
+	sort.Sort(placeholderIDs(placeholders))
+	// Unique
+	count := 1
+	for i := 1; i < len(placeholders); i++ {
+		if placeholders[i] == anyType {
+			placeholders[0] = anyType
+			return placeholders[:1]
+		}
+		if placeholders[i] != placeholders[count-1] {
+			placeholders[count] = placeholders[i]
+			count++
+		}
+	}
+	// We return a slice pointing to the same underlying array - reallocation to reduce it is not what we want probably
+	return placeholders[:count]
+}
+
 type objectDesc struct {
 	allContain     []placeholderID
 	fieldContains  map[string][]placeholderID
@@ -57,6 +89,13 @@ func (o *objectDesc) widen(other *objectDesc) {
 	o.allFieldsKnown = o.allFieldsKnown || other.allFieldsKnown
 }
 
+func (o *objectDesc) normalize() {
+	o.allContain = normalizePlaceholders(o.allContain)
+	for f, ps := range o.fieldContains {
+		o.fieldContains[f] = normalizePlaceholders(ps)
+	}
+}
+
 type functionDesc struct {
 	resultContains []placeholderID
 
@@ -69,6 +108,10 @@ func (f *functionDesc) widen(other *functionDesc) {
 	}
 
 	f.resultContains = append(f.resultContains, other.resultContains...)
+}
+
+func (f *functionDesc) normalize() {
+	f.resultContains = normalizePlaceholders(f.resultContains)
 }
 
 // TODO(sbarzowski) unexport this
@@ -136,28 +179,38 @@ func Describe(t *TypeDesc) string {
 	return strings.Join(parts, " or ")
 }
 
-func (a *TypeDesc) widen(b *TypeDesc) {
-	a.Bool = a.Bool || b.Bool
-	a.Number = a.Number || b.Number
-	a.String = a.String || b.String
-	a.Null = a.Null || b.Null
+func (t *TypeDesc) widen(b *TypeDesc) {
+	t.Bool = t.Bool || b.Bool
+	t.Number = t.Number || b.Number
+	t.String = t.String || b.String
+	t.Null = t.Null || b.Null
 
-	if a.FunctionDesc != nil {
-		a.FunctionDesc.widen(b.FunctionDesc)
-	} else if a.FunctionDesc == nil && b.FunctionDesc != nil {
+	if t.FunctionDesc != nil {
+		t.FunctionDesc.widen(b.FunctionDesc)
+	} else if t.FunctionDesc == nil && b.FunctionDesc != nil {
 		copy := *b.FunctionDesc
-		a.FunctionDesc = &copy
+		t.FunctionDesc = &copy
 	}
 
-	if a.ObjectDesc != nil {
-		a.ObjectDesc.widen(b.ObjectDesc)
-	} else if a.ObjectDesc == nil && b.ObjectDesc != nil {
+	if t.ObjectDesc != nil {
+		t.ObjectDesc.widen(b.ObjectDesc)
+	} else if t.ObjectDesc == nil && b.ObjectDesc != nil {
 		copy := *b.ObjectDesc
-		a.ObjectDesc = &copy
+		t.ObjectDesc = &copy
 	}
 
-	a.Array = a.Array || b.Array
-	a.ArrayElementContains = append(a.ArrayElementContains, b.ArrayElementContains...)
+	t.Array = t.Array || b.Array
+	t.ArrayElementContains = append(t.ArrayElementContains, b.ArrayElementContains...)
+}
+
+func (t *TypeDesc) normalize() {
+	t.ArrayElementContains = normalizePlaceholders(t.ArrayElementContains)
+	if t.FunctionDesc != nil {
+		t.FunctionDesc.normalize()
+	}
+	if t.ObjectDesc != nil {
+		t.ObjectDesc.normalize()
+	}
 }
 
 type placeholderID int
@@ -176,7 +229,7 @@ var anyFunctionType placeholderID = 7
 type indexSpec struct {
 	indexed placeholderID
 
-	// TODO(sbarzowski) this name is ambigous think of something better or at least document it and make it consistent with helper function names
+	// TODO(sbarzowski) this name is ambigous, think of something better or at least document it and make it consistent with helper function names
 	stringIndex string
 
 	knownStringIndex bool
@@ -492,6 +545,8 @@ func (g *typeGraph) resolveTypesInSCC(scc []placeholderID) {
 		}
 	}
 
+	common.normalize()
+
 	for _, p := range scc {
 		g.upperBound[p] = common
 	}
@@ -522,145 +577,6 @@ func tpRef(p placeholderID) typePlaceholder {
 	return typePlaceholder{
 		contains: []placeholderID{p},
 	}
-}
-
-func prepareTPWithPlaceholder(node ast.Node, g *typeGraph, p placeholderID) {
-	if node == nil {
-		panic("Node cannot be nil")
-	}
-	switch node := node.(type) {
-	case *ast.Local:
-		bindPlaceholders := make([]placeholderID, len(node.Binds))
-		for i := range node.Binds {
-			bindPlaceholders[i] = g.newPlaceholder()
-			g.exprPlaceholder[node.Binds[i].Body] = bindPlaceholders[i]
-		}
-		for i := range node.Binds {
-			// TODO(sbarzowski) what about func? is desugaring allowing us to avoid that
-			prepareTPWithPlaceholder(node.Binds[i].Body, g, bindPlaceholders[i])
-		}
-		prepareTP(node.Body, g)
-	default:
-		for _, child := range parser.Children(node) {
-			if child == nil {
-				panic("Bug - child cannot be nil")
-			}
-			prepareTP(child, g)
-		}
-	}
-	*(g.placeholder(p)) = calcTP(node, g)
-}
-
-func prepareTP(node ast.Node, g *typeGraph) {
-	if node == nil {
-		panic("Node cannot be nil")
-	}
-	p := g.newPlaceholder()
-	g.exprPlaceholder[node] = p
-	prepareTPWithPlaceholder(node, g, p)
-}
-
-func calcTP(node ast.Node, g *typeGraph) typePlaceholder {
-	switch node := node.(type) {
-	case *ast.Array:
-		elements := make([]placeholderID, len(node.Elements))
-		for i, el := range node.Elements {
-			elements[i] = g.exprPlaceholder[el]
-		}
-		return concreteTP(TypeDesc{Array: true, ArrayElementContains: elements})
-	case *ast.Binary:
-		// complicated
-		return tpRef(anyType)
-	case *ast.Unary:
-		switch node.Op {
-		case ast.UopNot:
-			return tpRef(boolType)
-		case ast.UopBitwiseNot, ast.UopPlus, ast.UopMinus:
-			return tpRef(numberType)
-		default:
-			panic(fmt.Sprintf("Unrecognized unary operator %v", node.Op))
-		}
-	case *ast.Conditional:
-		return tpSum(g.exprPlaceholder[node.BranchTrue], g.exprPlaceholder[node.BranchFalse])
-	case *ast.Var:
-		v := g.varAt[node]
-		if v == nil {
-			panic("Could not find variable")
-		}
-		if v.Stdlib {
-			return concreteTP(TypeDesc{ObjectDesc: &objectDesc{
-				allFieldsKnown: false,
-				allContain:     []placeholderID{anyType},
-			}})
-		}
-		if v.Param {
-			return tpRef(anyType)
-		}
-		return tpRef(g.exprPlaceholder[v.BindNode])
-	case *ast.DesugaredObject:
-		// TODO
-		obj := &objectDesc{
-			allFieldsKnown: true,
-			fieldContains:  make(map[string][]placeholderID),
-		}
-		for _, field := range node.Fields {
-			switch fieldName := field.Name.(type) {
-			case *ast.LiteralString:
-				obj.fieldContains[fieldName.Value] = append(obj.fieldContains[fieldName.Value], g.exprPlaceholder[field.Body])
-			default:
-				obj.allContain = append(obj.allContain, g.exprPlaceholder[field.Body])
-				obj.allFieldsKnown = false
-			}
-		}
-		return concreteTP(TypeDesc{ObjectDesc: obj})
-	case *ast.Error:
-		return concreteTP(voidTypeDesc())
-	case *ast.Index:
-		// indexType := typeOf[node.Index]
-		// TODO
-		switch index := node.Index.(type) {
-		case *ast.LiteralString:
-			return tpIndex(knownObjectIndex(g.exprPlaceholder[node.Target], index.Value))
-		default:
-			return tpIndex(unknownIndexSpec(g.exprPlaceholder[node.Target]))
-		}
-	case *ast.Import:
-		// complicated
-		return tpRef(anyType)
-	case *ast.ImportStr:
-		// complicated
-		return tpRef(stringType)
-	case *ast.LiteralBoolean:
-		return tpRef(boolType)
-	case *ast.LiteralNull:
-		return tpRef(nullType)
-
-	case *ast.LiteralNumber:
-		return tpRef(numberType)
-
-	case *ast.LiteralString:
-		return tpRef(stringType)
-
-	case *ast.Local:
-		// TODO(sbarzowski) perhaps it should return the id and any creation of the new placeholders would happend in this function
-		// then we would be able to avoid unnecessary indirection
-		return tpRef(g.exprPlaceholder[node.Body])
-	case *ast.Self:
-		// no recursion yet
-		return tpRef(anyObjectType)
-	case *ast.SuperIndex:
-		return tpRef(anyObjectType)
-	case *ast.InSuper:
-		return tpRef(boolType)
-	case *ast.Function:
-		// TODO(sbarzowski) more fancy description of functions...
-		return concreteTP(TypeDesc{FunctionDesc: &functionDesc{
-			resultContains: []placeholderID{g.exprPlaceholder[node.Body]},
-		}})
-	case *ast.Apply:
-		return tpIndex(functionCallIndex(g.exprPlaceholder[node.Target]))
-	}
-	panic(fmt.Sprintf("Unexpected %#v", node))
 }
 
 type ExprTypes map[ast.Node]TypeDesc
@@ -735,12 +651,12 @@ func PrepareTypes(node ast.Node, typeOf ExprTypes, varAt map[ast.Node]*common.Va
 	g.findTypes()
 	for e, p := range g.exprPlaceholder {
 		// TODO(sbarzowski) using errors for debugging, ugh
-		// lf := jsonnet.LinterFormatter()
-		// lf.SetColorFormatter(color.New(color.FgRed).Fprintf)
-		// fmt.Fprintf(os.Stderr, lf.Format(parser.StaticError{
-		// 	Loc: *e.Loc(),
-		// 	Msg: fmt.Sprintf("placeholder %d is %s", p, Describe(&g.upperBound[p])),
-		// }))
+		lf := jsonnet.LinterFormatter()
+		lf.SetColorFormatter(color.New(color.FgRed).Fprintf)
+		fmt.Fprintf(os.Stderr, lf.Format(parser.StaticError{
+			Loc: *e.Loc(),
+			Msg: fmt.Sprintf("placeholder %d is %s", p, Describe(&g.upperBound[p])),
+		}))
 
 		// TODO(sbarzowski) here we'll need to handle additional
 		typeOf[e] = g.upperBound[p]

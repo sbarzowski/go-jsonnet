@@ -250,11 +250,13 @@ func (p *parser) parseBind(binds *ast.LocalBinds) error {
 			Variable: ast.Identifier(varID.data),
 			Body:     body,
 			Fun:      fun,
+			LocRange: locFromTokenAST(varID, body),
 		})
 	} else {
 		*binds = append(*binds, ast.LocalBind{
 			Variable: ast.Identifier(varID.data),
 			Body:     body,
+			LocRange: locFromTokenAST(varID, body),
 		})
 	}
 
@@ -375,6 +377,8 @@ func (p *parser) parseObjectRemainder(tok *token) (ast.Node, *token, error) {
 		}
 		first = false
 
+		fieldInitialToken := next
+
 		switch next.kind {
 		case tokenBracketL, tokenIdentifier, tokenStringDouble, tokenStringSingle,
 			tokenStringBlock, tokenVerbatimStringDouble, tokenVerbatimStringSingle:
@@ -457,6 +461,7 @@ func (p *parser) parseObjectRemainder(tok *token) (ast.Node, *token, error) {
 				Params:        params,
 				TrailingComma: methComma,
 				Expr2:         body,
+				LocRange:      locFromTokenAST(fieldInitialToken, body),
 			})
 
 		case tokenLocal:
@@ -515,6 +520,7 @@ func (p *parser) parseObjectRemainder(tok *token) (ast.Node, *token, error) {
 				Params:        params,
 				TrailingComma: funcComma,
 				Expr2:         body,
+				LocRange:      locFromTokenAST(varID, body),
 			})
 
 		case tokenAssert:
@@ -522,6 +528,7 @@ func (p *parser) parseObjectRemainder(tok *token) (ast.Node, *token, error) {
 			if err != nil {
 				return nil, nil, err
 			}
+			lastNode := cond
 			var msg ast.Node
 			if p.peek().kind == tokenOperator && p.peek().data == ":" {
 				p.pop()
@@ -529,13 +536,15 @@ func (p *parser) parseObjectRemainder(tok *token) (ast.Node, *token, error) {
 				if err != nil {
 					return nil, nil, err
 				}
+				lastNode = msg
 			}
 
 			fields = append(fields, ast.ObjectField{
-				Kind:  ast.ObjectAssert,
-				Hide:  ast.ObjectFieldVisible,
-				Expr2: cond,
-				Expr3: msg,
+				Kind:     ast.ObjectAssert,
+				Hide:     ast.ObjectFieldVisible,
+				Expr2:    cond,
+				Expr3:    msg,
+				LocRange: locFromTokenAST(fieldInitialToken, lastNode),
 			})
 		default:
 			return nil, nil, makeUnexpectedError(next, "parsing field definition")

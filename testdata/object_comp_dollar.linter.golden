@@ -1,5 +1,0 @@
-../testdata/object_comp_dollar:1:33-36 Indexed value is neither an array nor an object nor a string
-
-{ [x]: if x == "a" then 42 else $.a + 1 for x in ["a", "b", "c"] }
-
-
