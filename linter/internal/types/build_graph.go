@@ -10,6 +10,8 @@ import (
 	"github.com/google/go-jsonnet/parser"
 )
 
+const maxKnownCount = 5
+
 func (g *typeGraph) getExprPlaceholder(node ast.Node) placeholderID {
 	if g.exprPlaceholder[node] == noType {
 		fmt.Fprintf(os.Stderr, "------------------------------------------------------------------\n")
@@ -75,11 +77,25 @@ func prepareTP(node ast.Node, g *typeGraph) {
 func calcTP(node ast.Node, g *typeGraph) typePlaceholder {
 	switch node := node.(type) {
 	case *ast.Array:
-		elements := make([]placeholderID, len(node.Elements))
-		for i, el := range node.Elements {
-			elements[i] = g.getExprPlaceholder(el)
+		knownCount := len(node.Elements)
+		if knownCount > maxKnownCount {
+			knownCount = maxKnownCount
 		}
-		return concreteTP(TypeDesc{Array: true, ArrayElementContains: elements})
+
+		desc := &arrayDesc{
+			allContain:      make([]placeholderID, 0, len(node.Elements)-knownCount),
+			elementContains: make([][]placeholderID, knownCount, maxKnownCount),
+		}
+
+		for i, el := range node.Elements {
+			if i < knownCount {
+				desc.elementContains[i] = []placeholderID{g.getExprPlaceholder(el)}
+			} else {
+				desc.allContain = append(desc.allContain, g.getExprPlaceholder(el))
+			}
+		}
+
+		return concreteTP(TypeDesc{ArrayDesc: desc})
 	case *ast.Binary:
 		// complicated
 		return tpRef(anyType)
@@ -136,14 +152,16 @@ func calcTP(node ast.Node, g *typeGraph) typePlaceholder {
 	case *ast.Error:
 		return concreteTP(voidTypeDesc())
 	case *ast.Index:
-		// indexType := typeOf[node.Index]
-		// TODO
 		switch index := node.Index.(type) {
 		case *ast.LiteralString:
 			return tpIndex(knownObjectIndex(g.getExprPlaceholder(node.Target), index.Value))
-		default:
-			return tpIndex(unknownIndexSpec(g.getExprPlaceholder(node.Target)))
+		case *ast.LiteralNumber:
+			valFloat := index.Value
+			if valFloat >= 0 && valFloat < maxKnownCount && valFloat == float64(int64(valFloat)) {
+				return tpIndex(arrayIndex(g.getExprPlaceholder(node.Target), int(valFloat)))
+			}
 		}
+		return tpIndex(unknownIndexSpec(g.getExprPlaceholder(node.Target)))
 	case *ast.Import:
 		// complicated
 		return tpRef(anyType)

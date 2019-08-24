@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"sort"
-	"strings"
 
 	"github.com/fatih/color"
 
@@ -45,6 +44,20 @@ type SimpleTypeDesc struct {
 	Array    bool // TODO(sbarzowski) better rep
 }
 
+type placeholderID int
+type stronglyConnectedComponentID int
+
+// 0 value for placeholderID acting as "nil" for placeholders
+var noType placeholderID
+var anyType placeholderID = 1
+var boolType placeholderID = 2
+var numberType placeholderID = 3
+var stringType placeholderID = 4
+var nullType placeholderID = 5
+var anyArrayType placeholderID = 6
+var anyObjectType placeholderID = 7
+var anyFunctionType placeholderID = 8
+
 type placeholderIDs []placeholderID
 
 func (p placeholderIDs) Len() int           { return len(p) }
@@ -72,199 +85,6 @@ func normalizePlaceholders(placeholders []placeholderID) []placeholderID {
 	return placeholders[:count]
 }
 
-type objectDesc struct {
-	allContain     []placeholderID
-	fieldContains  map[string][]placeholderID
-	allFieldsKnown bool
-}
-
-func (o *objectDesc) widen(other *objectDesc) {
-	if other == nil {
-		return
-	}
-	o.allContain = append(o.allContain, other.allContain...)
-	for name, placeholders := range other.fieldContains {
-		o.fieldContains[name] = append(o.fieldContains[name], placeholders...)
-	}
-	o.allFieldsKnown = o.allFieldsKnown || other.allFieldsKnown
-}
-
-func (o *objectDesc) normalize() {
-	o.allContain = normalizePlaceholders(o.allContain)
-	for f, ps := range o.fieldContains {
-		o.fieldContains[f] = normalizePlaceholders(ps)
-	}
-}
-
-type functionDesc struct {
-	resultContains []placeholderID
-
-	// TODO(sbarzowski) arity
-}
-
-func (f *functionDesc) widen(other *functionDesc) {
-	if other == nil {
-		return
-	}
-
-	f.resultContains = append(f.resultContains, other.resultContains...)
-}
-
-func (f *functionDesc) normalize() {
-	f.resultContains = normalizePlaceholders(f.resultContains)
-}
-
-// TODO(sbarzowski) unexport this
-type TypeDesc struct {
-	Bool                 bool
-	Number               bool
-	String               bool
-	Null                 bool
-	FunctionDesc         *functionDesc
-	ObjectDesc           *objectDesc
-	Array                bool
-	ArrayElementContains []placeholderID // TODO(sbarzowski) better rep
-}
-
-func (t *TypeDesc) Any() bool {
-	// TODO(sbarzowski) BUG - must check that function, object and array allow any values
-	return t.Bool && t.Number && t.String && t.Null && t.Function() && t.Object() && t.Array
-}
-
-func (t *TypeDesc) Void() bool {
-	return !t.Bool && !t.Number && !t.String && !t.Null && !t.Function() && !t.Object() && !t.Array
-}
-
-func (t *TypeDesc) Function() bool {
-	return t.FunctionDesc != nil
-}
-
-func (t *TypeDesc) Object() bool {
-	return t.ObjectDesc != nil
-}
-
-func voidTypeDesc() TypeDesc {
-	return TypeDesc{}
-}
-
-func Describe(t *TypeDesc) string {
-	if t.Any() {
-		return "any"
-	}
-	if t.Void() {
-		return "void"
-	}
-	parts := []string{}
-	if t.Bool {
-		parts = append(parts, "bool")
-	}
-	if t.Number {
-		parts = append(parts, "number")
-	}
-	if t.String {
-		parts = append(parts, "string")
-	}
-	if t.Null {
-		parts = append(parts, "null")
-	}
-	if t.Function() {
-		parts = append(parts, "function")
-	}
-	if t.Object() {
-		parts = append(parts, "object")
-	}
-	if t.Array {
-		parts = append(parts, "array")
-	}
-	return strings.Join(parts, " or ")
-}
-
-func (t *TypeDesc) widen(b *TypeDesc) {
-	t.Bool = t.Bool || b.Bool
-	t.Number = t.Number || b.Number
-	t.String = t.String || b.String
-	t.Null = t.Null || b.Null
-
-	if t.FunctionDesc != nil {
-		t.FunctionDesc.widen(b.FunctionDesc)
-	} else if t.FunctionDesc == nil && b.FunctionDesc != nil {
-		copy := *b.FunctionDesc
-		t.FunctionDesc = &copy
-	}
-
-	if t.ObjectDesc != nil {
-		t.ObjectDesc.widen(b.ObjectDesc)
-	} else if t.ObjectDesc == nil && b.ObjectDesc != nil {
-		copy := *b.ObjectDesc
-		t.ObjectDesc = &copy
-	}
-
-	t.Array = t.Array || b.Array
-	t.ArrayElementContains = append(t.ArrayElementContains, b.ArrayElementContains...)
-}
-
-func (t *TypeDesc) normalize() {
-	t.ArrayElementContains = normalizePlaceholders(t.ArrayElementContains)
-	if t.FunctionDesc != nil {
-		t.FunctionDesc.normalize()
-	}
-	if t.ObjectDesc != nil {
-		t.ObjectDesc.normalize()
-	}
-}
-
-type placeholderID int
-type stronglyConnectedComponentID int
-
-// 0 value for placeholderID acting as "nil" for placeholders
-var noType placeholderID
-var anyType placeholderID = 1
-var boolType placeholderID = 2
-var numberType placeholderID = 3
-var stringType placeholderID = 4
-var nullType placeholderID = 5
-var anyObjectType placeholderID = 6
-var anyFunctionType placeholderID = 7
-
-type indexSpec struct {
-	indexed placeholderID
-
-	// TODO(sbarzowski) this name is ambigous, think of something better or at least document it and make it consistent with helper function names
-	stringIndex string
-
-	knownStringIndex bool
-	functionIndex    bool
-}
-
-func unknownIndexSpec(indexed placeholderID) *indexSpec {
-	return &indexSpec{
-		indexed:          indexed,
-		stringIndex:      "",
-		knownStringIndex: false,
-	}
-}
-
-func knownObjectIndex(indexed placeholderID, index string) *indexSpec {
-	return &indexSpec{
-		indexed:          indexed,
-		stringIndex:      index,
-		knownStringIndex: true,
-	}
-}
-
-func functionCallIndex(function placeholderID) *indexSpec {
-	return &indexSpec{
-		indexed:       function,
-		functionIndex: true,
-	}
-}
-
-type elementDesc struct {
-	genericIndex placeholderID
-	stringIndex  map[string]placeholderID
-	callIndex    placeholderID
-}
-
 func (g *typeGraph) getOrCreateElementType(target placeholderID, index *indexSpec) (bool, placeholderID) {
 	// In case there was no previous indexing
 	if g.elementType[target] == nil {
@@ -276,7 +96,7 @@ func (g *typeGraph) getOrCreateElementType(target placeholderID, index *indexSpe
 	created := false
 
 	// Actual specific indexing depending on the index type
-	if index.knownStringIndex {
+	if index.indexType == knownStringIndex {
 		if elementType.stringIndex == nil {
 			elementType.stringIndex = make(map[string]placeholderID)
 		}
@@ -288,27 +108,41 @@ func (g *typeGraph) getOrCreateElementType(target placeholderID, index *indexSpe
 		} else {
 			return created, elementType.stringIndex[index.stringIndex]
 		}
-	} else if index.functionIndex {
+	} else if index.indexType == knownIntIndex {
+		if elementType.intIndex == nil {
+			elementType.intIndex = make([]placeholderID, maxKnownCount)
+		}
+		if elementType.intIndex[index.intIndex] == noType {
+			created = true
+			elID := g.newPlaceholder()
+			elementType.intIndex[index.intIndex] = elID
+			return created, elID
+		} else {
+			return created, elementType.intIndex[index.intIndex]
+		}
+	} else if index.indexType == functionIndex {
 		if elementType.callIndex == noType {
 			created = true
 			elementType.callIndex = g.newPlaceholder()
 		}
 		return created, elementType.callIndex
-	} else {
+	} else if index.indexType == genericIndex {
 		if elementType.genericIndex == noType {
 			created = true
 			elementType.genericIndex = g.newPlaceholder()
 		}
 		return created, elementType.genericIndex
+	} else {
+		panic("unknown index type")
 	}
 }
 
 func (g *typeGraph) setElementType(target placeholderID, index *indexSpec, newID placeholderID) {
 	elementType := g.elementType[target]
 
-	if index.knownStringIndex {
+	if index.indexType == knownStringIndex {
 		elementType.stringIndex[index.stringIndex] = newID
-	} else if index.functionIndex {
+	} else if index.indexType == functionIndex {
 		elementType.callIndex = newID
 	} else {
 		elementType.genericIndex = newID
@@ -400,17 +234,25 @@ func (g *typeGraph) separateElementTypes() {
 		contains := make([]placeholderID, 0, 1)
 
 		// Direct indexing
-		if index.knownStringIndex {
+		if index.indexType == knownStringIndex {
 			if c.concrete.Object() {
 				contains = append(contains, c.concrete.ObjectDesc.allContain...)
 				contains = append(contains, c.concrete.ObjectDesc.fieldContains[index.stringIndex]...)
 			}
-			// TODO(sbarzowski) but here we need to save the right element type, not the generic one
-		} else if index.functionIndex {
+		} else if index.indexType == knownIntIndex {
+			// TODO(sbarzowski) what if it's a string
+			if c.concrete.Array() {
+				// TODO(sbarzowski) consider changing the representation to otherContain - it could be more useful
+				contains = append(contains, c.concrete.ArrayDesc.allContain...)
+				if index.intIndex < len(c.concrete.ArrayDesc.elementContains) {
+					contains = append(contains, c.concrete.ArrayDesc.elementContains[index.intIndex]...)
+				}
+			}
+		} else if index.indexType == functionIndex {
 			if c.concrete.Function() {
 				contains = append(contains, c.concrete.FunctionDesc.resultContains...)
 			}
-		} else {
+		} else if index.indexType == genericIndex {
 			// TODO(sbarzowski) performance issues when the object is big
 			if c.concrete.Object() {
 				contains = append(contains, c.concrete.ObjectDesc.allContain...)
@@ -419,9 +261,16 @@ func (g *typeGraph) separateElementTypes() {
 				}
 			}
 
-			for _, p := range c.concrete.ArrayElementContains {
-				contains = append(contains, p)
+			if c.concrete.ArrayDesc != nil {
+				for _, placeholders := range c.concrete.ArrayDesc.elementContains {
+					contains = append(contains, placeholders...)
+				}
+				contains = append(contains, c.concrete.ArrayDesc.allContain...)
 			}
+
+			// TODO(sbarzowski) what if it's a string
+		} else {
+			panic("unknown index type")
 		}
 
 		// The indexed thing may itself be indexing something, so we need to go deeper
@@ -435,6 +284,7 @@ func (g *typeGraph) separateElementTypes() {
 			contains = append(contains, getElementType(contained, index))
 		}
 
+		contains = normalizePlaceholders(contains)
 		g._placeholders[elID].contains = contains
 
 		// Immediate path compression
@@ -596,20 +446,23 @@ func PrepareTypes(node ast.Node, typeOf ExprTypes, varAt map[ast.Node]*common.Va
 		resultContains: []placeholderID{anyType},
 	}
 
+	anyArrayDesc := &arrayDesc{
+		allContain: []placeholderID{anyType},
+	}
+
 	// Create the "no-type" sentinel placeholder
 	g.newPlaceholder()
 
 	// any type
 	g.newPlaceholder()
 	g._placeholders[anyType] = concreteTP(TypeDesc{
-		Bool:                 true,
-		Number:               true,
-		String:               true,
-		Null:                 true,
-		FunctionDesc:         anyFunctionDesc,
-		ObjectDesc:           anyObjectDesc,
-		Array:                true,
-		ArrayElementContains: []placeholderID{anyType},
+		Bool:         true,
+		Number:       true,
+		String:       true,
+		Null:         true,
+		FunctionDesc: anyFunctionDesc,
+		ObjectDesc:   anyObjectDesc,
+		ArrayDesc:    anyArrayDesc,
 	})
 
 	g.newPlaceholder()
@@ -630,6 +483,11 @@ func PrepareTypes(node ast.Node, typeOf ExprTypes, varAt map[ast.Node]*common.Va
 	g.newPlaceholder()
 	g._placeholders[nullType] = concreteTP(TypeDesc{
 		Null: true,
+	})
+
+	g.newPlaceholder()
+	g._placeholders[anyArrayType] = concreteTP(TypeDesc{
+		ArrayDesc: anyArrayDesc,
 	})
 
 	g.newPlaceholder()
@@ -660,73 +518,6 @@ func PrepareTypes(node ast.Node, typeOf ExprTypes, varAt map[ast.Node]*common.Va
 
 		// TODO(sbarzowski) here we'll need to handle additional
 		typeOf[e] = g.upperBound[p]
-	}
-}
-
-type ErrCollector struct {
-	Errs []parser.StaticError
-}
-
-func (ec *ErrCollector) collect(err parser.StaticError) {
-	ec.Errs = append(ec.Errs, err)
-}
-
-func (ec *ErrCollector) staticErr(msg string, loc *ast.LocationRange) {
-	ec.collect(parser.MakeStaticError(msg, *loc))
-}
-
-func checkSubexpr(node ast.Node, typeOf ExprTypes, ec *ErrCollector) {
-	for _, child := range parser.Children(node) {
-		Check(child, typeOf, ec)
-	}
-}
-
-func Check(node ast.Node, typeOf ExprTypes, ec *ErrCollector) {
-	checkSubexpr(node, typeOf, ec)
-	switch node := node.(type) {
-	case *ast.Apply:
-		t := typeOf[node.Target]
-		if !t.Function() {
-			ec.staticErr("Called value must be a function, but it is assumed to be "+Describe(&t), node.Loc())
-		}
-	case *ast.Index:
-		targetType := typeOf[node.Target]
-		indexType := typeOf[node.Index]
-
-		if !targetType.Array && !targetType.Object() && !targetType.String {
-			ec.staticErr("Indexed value is neither an array nor an object nor a string", node.Loc())
-		} else if !targetType.Object() {
-			// It's not an object, so it must be an array or a string
-			var assumedType string
-			if targetType.Array && targetType.String {
-				assumedType = "an array or a string"
-			} else if targetType.Array {
-				assumedType = "an array"
-			} else {
-				assumedType = "a string"
-			}
-			if !indexType.Number {
-				ec.staticErr("Indexed value is assumed to be "+assumedType+", but index is not a number", node.Loc())
-			}
-		} else if !targetType.Array {
-			// It's not an array so it must be an object
-			if !indexType.String {
-				ec.staticErr("Indexed value is assumed to be an object, but index is not a string", node.Loc())
-			}
-			if targetType.ObjectDesc.allFieldsKnown {
-				switch indexNode := node.Index.(type) {
-				case *ast.LiteralString:
-					if _, hasField := targetType.ObjectDesc.fieldContains[indexNode.Value]; !hasField {
-						ec.staticErr(fmt.Sprintf("Indexed object has no field %#v", indexNode.Value), node.Loc())
-					}
-				}
-			}
-		} else if !indexType.Number && !indexType.String {
-			// We don't know what the target is, but we sure cannot index it with that
-			ec.staticErr("Index is neither a number (for indexing arrays and string) nor a string (for indexing objects)", node.Loc())
-		}
-	case *ast.Unary:
-		// TODO(sbarzowski) this
 	}
 }
 
