@@ -2,6 +2,7 @@ package types
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"sort"
 
@@ -34,15 +35,15 @@ import (
 
 // TODO(sbarzowski) what should be exported and what shouldn't
 
-type SimpleTypeDesc struct {
-	Bool     bool
-	Number   bool
-	String   bool
-	Null     bool
-	Function bool // TODO(sbarzowski) better rep
-	Object   bool // TODO(sbarzowski) better rep
-	Array    bool // TODO(sbarzowski) better rep
-}
+// type SimpleTypeDesc struct {
+// 	Bool     bool
+// 	Number   bool
+// 	String   bool
+// 	Null     bool
+// 	Function bool // TODO(sbarzowski) better rep
+// 	Object   bool // TODO(sbarzowski) better rep
+// 	Array    bool // TODO(sbarzowski) better rep
+// }
 
 type placeholderID int
 type stronglyConnectedComponentID int
@@ -443,6 +444,10 @@ func PrepareTypes(node ast.Node, typeOf ExprTypes, varAt map[ast.Node]*common.Va
 	}
 
 	anyFunctionDesc := &functionDesc{
+		minArity: 0,
+		// Technically on 64-bit system if someone really tries maybe they can
+		// go over that and get strange errors. At this point I don't care.
+		maxArity:       math.MaxInt32,
 		resultContains: []placeholderID{anyType},
 	}
 

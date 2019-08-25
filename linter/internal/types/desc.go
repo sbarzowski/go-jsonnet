@@ -1,6 +1,10 @@
 package types
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/google/go-jsonnet/ast"
+)
 
 type arrayDesc struct {
 	allContain []placeholderID
@@ -56,12 +60,46 @@ func (o *objectDesc) normalize() {
 type functionDesc struct {
 	resultContains []placeholderID
 
+	params *ast.Parameters
+
+	minArity, maxArity int
 	// TODO(sbarzowski) arity
+}
+
+func sameParameters(a, b *ast.Parameters) bool {
+	if len(a.Required) != len(b.Required) || len(a.Optional) != len(b.Optional) {
+		return false
+	}
+
+	for i := range a.Required {
+		if a.Required[i] != b.Required[i] {
+			return false
+		}
+	}
+
+	for i := range a.Optional {
+		if a.Optional[i] != b.Optional[i] {
+			return false
+		}
+	}
+
+	return true
 }
 
 func (f *functionDesc) widen(other *functionDesc) {
 	if other == nil {
 		return
+	}
+
+	if other.minArity < f.minArity {
+		f.minArity = other.minArity
+	}
+	if other.maxArity > f.maxArity {
+		f.maxArity = other.maxArity
+	}
+
+	if !sameParameters(f.params, other.params) {
+		f.params = nil
 	}
 
 	f.resultContains = append(f.resultContains, other.resultContains...)

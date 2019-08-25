@@ -1,0 +1,5 @@
+testdata/argcheck_additional:2:3-4 Too many arguments, there can be at most 0, but 1 provided
+
+f(1)
+
+

@@ -193,6 +193,9 @@ func calcTP(node ast.Node, g *typeGraph) typePlaceholder {
 	case *ast.Function:
 		// TODO(sbarzowski) more fancy description of functions...
 		return concreteTP(TypeDesc{FunctionDesc: &functionDesc{
+			minArity:       len(node.Parameters.Required),
+			maxArity:       len(node.Parameters.Required) + len(node.Parameters.Optional),
+			params:         &node.Parameters,
 			resultContains: []placeholderID{g.getExprPlaceholder(node.Body)},
 		}})
 	case *ast.Apply:

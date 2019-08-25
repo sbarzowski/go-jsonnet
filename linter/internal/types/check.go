@@ -32,6 +32,18 @@ func Check(node ast.Node, typeOf ExprTypes, ec *ErrCollector) {
 		t := typeOf[node.Target]
 		if !t.Function() {
 			ec.staticErr("Called value must be a function, but it is assumed to be "+Describe(&t), node.Loc())
+		} else if t.FunctionDesc.params != nil {
+			checkArgs(t.FunctionDesc.params, &node.Arguments, node.Loc(), ec)
+		} else {
+			argsCount := len(node.Arguments.Named) + len(node.Arguments.Positional)
+			minArity := t.FunctionDesc.minArity
+			maxArity := t.FunctionDesc.maxArity
+			if minArity > argsCount {
+				ec.staticErr(fmt.Sprintf("Too few arguments: got %d, but expected at least %d", argsCount, minArity), node.Loc())
+			}
+			if maxArity < argsCount {
+				ec.staticErr(fmt.Sprintf("Too many arguments: got %d, but expected at most %d", argsCount, maxArity), node.Loc())
+			}
 		}
 	case *ast.Index:
 		targetType := typeOf[node.Target]
@@ -71,5 +83,51 @@ func Check(node ast.Node, typeOf ExprTypes, ec *ErrCollector) {
 		}
 	case *ast.Unary:
 		// TODO(sbarzowski) this
+	}
+}
+
+// TODO(sbarzowski) eliminate duplication with the interpreter maybe
+func checkArgs(params *ast.Parameters, args *ast.Arguments, loc *ast.LocationRange, ec *ErrCollector) {
+	received := make(map[ast.Identifier]bool)
+	accepted := make(map[ast.Identifier]bool)
+
+	numPassed := len(args.Positional)
+	numExpected := len(params.Required) + len(params.Optional)
+
+	for _, param := range params.Required {
+		accepted[param] = true
+	}
+
+	for _, param := range params.Optional {
+		accepted[param.Name] = true
+	}
+
+	for i := range args.Positional {
+		if i < len(params.Required) {
+			received[params.Required[i]] = true
+		} else if i < numExpected {
+			received[params.Optional[i-len(params.Required)].Name] = true
+		} else {
+			ec.staticErr(fmt.Sprintf("Too many arguments, there can be at most %d, but %d provided", numExpected, numPassed), args.Positional[i].Loc())
+		}
+	}
+
+	for _, arg := range args.Named {
+		if _, present := received[arg.Name]; present {
+			ec.staticErr(fmt.Sprintf("Argument %v already provided", arg.Name), arg.Arg.Loc())
+			return
+		}
+		if _, present := accepted[arg.Name]; !present {
+			ec.staticErr(fmt.Sprintf("function has no parameter %v", arg.Name), arg.Arg.Loc())
+			return
+		}
+		received[arg.Name] = true
+	}
+
+	for _, param := range params.Required {
+		if _, present := received[param]; !present {
+			ec.staticErr(fmt.Sprintf("Missing argument: %v", param), loc)
+			return
+		}
 	}
 }

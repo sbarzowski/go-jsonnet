@@ -1,0 +1,5 @@
+testdata/min_arity_violated:2:1-4 Too few arguments: got 0, but expected at least 1
+
+f()
+
+
