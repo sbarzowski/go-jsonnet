@@ -180,8 +180,6 @@ func calcTP(node ast.Node, g *typeGraph) typePlaceholder {
 		return tpRef(stringType)
 
 	case *ast.Local:
-		// TODO(sbarzowski) perhaps it should return the id and any creation of the new placeholders would happend in this function
-		// then we would be able to avoid unnecessary indirection
 		return tpRef(g.getExprPlaceholder(node.Body))
 	case *ast.Self:
 		// no recursion yet

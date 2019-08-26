@@ -9,7 +9,9 @@ import (
 	"github.com/google/go-jsonnet/parser"
 
 	"github.com/google/go-jsonnet/linter/internal/common"
+	"github.com/google/go-jsonnet/linter/internal/traversal"
 	"github.com/google/go-jsonnet/linter/internal/types"
+	"github.com/google/go-jsonnet/linter/internal/utils"
 )
 
 // ErrorWriter encapsulates a writer and an error state indicating when at least
@@ -59,10 +61,13 @@ func Lint(node ast.Node, e *ErrorWriter) {
 		}
 	}
 	et := make(types.ExprTypes)
-	ec := types.ErrCollector{}
+	ec := utils.ErrCollector{}
 
 	types.PrepareTypes(node, et, lintingInfo.varAt)
 	types.Check(node, et, &ec)
+
+	traversal.Traverse(node, &ec)
+
 	for _, err := range ec.Errs {
 		e.writeError(err)
 	}
