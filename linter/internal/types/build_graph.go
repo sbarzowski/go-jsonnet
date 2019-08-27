@@ -117,10 +117,7 @@ func calcTP(node ast.Node, g *typeGraph) typePlaceholder {
 		}
 		switch v.VariableKind {
 		case common.VarStdlib:
-			return concreteTP(TypeDesc{ObjectDesc: &objectDesc{
-				allFieldsKnown: false,
-				allContain:     []placeholderID{anyType},
-			}})
+			return tpRef(stdlibType)
 		case common.VarParam:
 			return tpRef(anyType)
 

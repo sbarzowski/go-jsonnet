@@ -67,6 +67,9 @@ type functionDesc struct {
 }
 
 func sameParameters(a, b *ast.Parameters) bool {
+	if a == nil || b == nil {
+		return false
+	}
 	if len(a.Required) != len(b.Required) || len(a.Optional) != len(b.Optional) {
 		return false
 	}
