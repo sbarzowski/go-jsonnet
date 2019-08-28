@@ -38,6 +38,7 @@ type VM struct {
 	importer       Importer
 	ErrorFormatter ErrorFormatter
 	StringOutput   bool
+	importCache    *importCache
 }
 
 // External variable or top level argument provided before execution
@@ -53,6 +54,7 @@ type vmExtMap map[string]vmExt
 
 // MakeVM creates a new VM with default parameters.
 func MakeVM() *VM {
+	defaultImporter := &FileImporter{}
 	return &VM{
 		MaxStack:       500,
 		ext:            make(vmExtMap),
@@ -60,32 +62,60 @@ func MakeVM() *VM {
 		nativeFuncs:    make(map[string]*NativeFunction),
 		ErrorFormatter: &termErrorFormatter{pretty: false, maxStackTraceSize: 20},
 		importer:       &FileImporter{},
+		importCache:    makeImportCache(defaultImporter),
 	}
+}
+
+// Fully flush cache. This should be executed when we are no longer sure that the source files
+// didn't change, for example when the importer changed.
+func (vm *VM) flushCache() {
+	vm.importCache = makeImportCache(vm.importer)
+}
+
+// Flush value cache. This should be executed when calculated values may no longer be up to date,
+// for example due to change in extVars.
+func (vm *VM) flushValueCache() {
+
 }
 
 // ExtVar binds a Jsonnet external var to the given value.
 func (vm *VM) ExtVar(key string, val string) {
 	vm.ext[key] = vmExt{value: val, isCode: false}
+	vm.flushValueCache()
 }
 
 // ExtCode binds a Jsonnet external code var to the given code.
 func (vm *VM) ExtCode(key string, val string) {
 	vm.ext[key] = vmExt{value: val, isCode: true}
+	vm.flushValueCache()
 }
 
 // TLAVar binds a Jsonnet top level argument to the given value.
 func (vm *VM) TLAVar(key string, val string) {
 	vm.tla[key] = vmExt{value: val, isCode: false}
+	// TODO(sbarzowski) Is it actually needed? Perhaps TLAs only
+	// affect the result of the snippet being evaluated which is not cached anyway.
+	// Relatedly. perhaps an API where TLAs are passed directly as a map to the evaluate
+	// function would be better.
+	vm.flushValueCache()
 }
 
 // TLACode binds a Jsonnet top level argument to the given code.
 func (vm *VM) TLACode(key string, val string) {
 	vm.tla[key] = vmExt{value: val, isCode: true}
+	vm.flushValueCache()
 }
 
 // Importer sets Importer to use during evaluation (import callback).
 func (vm *VM) Importer(i Importer) {
 	vm.importer = i
+	vm.flushCache()
+}
+
+// NativeFunction registers a native function.
+func (vm *VM) NativeFunction(f *NativeFunction) {
+	vm.nativeFuncs[f.Name] = f
+	vm.flushValueCache()
 }
 
 type evalKind int
@@ -105,7 +135,7 @@ func (vm *VM) Evaluate(node ast.Node) (val string, err error) {
 			err = fmt.Errorf("(CRASH) %v\n%s", r, debug.Stack())
 		}
 	}()
-	return evaluate(node, vm.ext, vm.tla, vm.nativeFuncs, vm.MaxStack, vm.importer, vm.StringOutput)
+	return evaluate(node, vm.ext, vm.tla, vm.nativeFuncs, vm.MaxStack, vm.importCache, vm.StringOutput)
 }
 
 // EvaluateStream evaluates a Jsonnet program given by an Abstract Syntax Tree
@@ -116,7 +146,7 @@ func (vm *VM) EvaluateStream(node ast.Node) (output interface{}, err error) {
 			err = fmt.Errorf("(CRASH) %v\n%s", r, debug.Stack())
 		}
 	}()
-	return evaluateStream(node, vm.ext, vm.tla, vm.nativeFuncs, vm.MaxStack, vm.importer)
+	return evaluateStream(node, vm.ext, vm.tla, vm.nativeFuncs, vm.MaxStack, vm.importCache)
 }
 
 // EvaluateMulti evaluates a Jsonnet program given by an Abstract Syntax Tree
@@ -128,7 +158,7 @@ func (vm *VM) EvaluateMulti(node ast.Node) (output interface{}, err error) {
 			err = fmt.Errorf("(CRASH) %v\n%s", r, debug.Stack())
 		}
 	}()
-	return evaluateMulti(node, vm.ext, vm.tla, vm.nativeFuncs, vm.MaxStack, vm.importer, vm.StringOutput)
+	return evaluateMulti(node, vm.ext, vm.tla, vm.nativeFuncs, vm.MaxStack, vm.importCache, vm.StringOutput)
 }
 
 func (vm *VM) evaluateSnippet(filename string, snippet string, kind evalKind) (output interface{}, err error) {
@@ -143,21 +173,16 @@ func (vm *VM) evaluateSnippet(filename string, snippet string, kind evalKind) (o
 	}
 	switch kind {
 	case evalKindRegular:
-		output, err = evaluate(node, vm.ext, vm.tla, vm.nativeFuncs, vm.MaxStack, vm.importer, vm.StringOutput)
+		output, err = evaluate(node, vm.ext, vm.tla, vm.nativeFuncs, vm.MaxStack, vm.importCache, vm.StringOutput)
 	case evalKindMulti:
-		output, err = evaluateMulti(node, vm.ext, vm.tla, vm.nativeFuncs, vm.MaxStack, vm.importer, vm.StringOutput)
+		output, err = evaluateMulti(node, vm.ext, vm.tla, vm.nativeFuncs, vm.MaxStack, vm.importCache, vm.StringOutput)
 	case evalKindStream:
-		output, err = evaluateStream(node, vm.ext, vm.tla, vm.nativeFuncs, vm.MaxStack, vm.importer)
+		output, err = evaluateStream(node, vm.ext, vm.tla, vm.nativeFuncs, vm.MaxStack, vm.importCache)
 	}
 	if err != nil {
 		return "", err
 	}
 	return output, nil
-}
-
-// NativeFunction registers a native function.
-func (vm *VM) NativeFunction(f *NativeFunction) {
-	vm.nativeFuncs[f.Name] = f
 }
 
 // EvaluateSnippet evaluates a string containing Jsonnet code, return a JSON
@@ -197,6 +222,22 @@ func (vm *VM) EvaluateSnippetMulti(filename string, snippet string) (files map[s
 	}
 	files = output.(map[string]string)
 	return
+}
+
+// ImportData fetches the data just as if it was imported from a Jsonnet file located at `importedFrom`.
+// It shares the cache with the actual evaluation.
+func (vm *VM) ImportData(importedFrom, importedPath string) (contents string, foundAt string, err error) {
+	c, foundAt, err := vm.importCache.importData(importedFrom, importedPath)
+	if err != nil {
+		return "", foundAt, err
+	}
+	return c.String(), foundAt, err
+}
+
+// ImportAST fetches the Jsonnet AST just as if it was imported from a Jsonnet file located at `importedFrom`.
+// It shares the cache with the actual evaluatio0n.
+func (vm *VM) ImportAST(importedFrom, importedPath string) (contents ast.Node, foundAt string, err error) {
+	return vm.importCache.importAST(importedFrom, importedPath)
 }
 
 func snippetToRawAST(filename string, snippet string) (ast.Node, error) {

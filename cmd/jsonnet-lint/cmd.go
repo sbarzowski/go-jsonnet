@@ -45,8 +45,11 @@ func main() {
 		Writer:    os.Stderr,
 		Formatter: jsonnet.LinterFormatter(),
 	}
+
+	vm := jsonnet.MakeVM()
+
 	errWriter.Formatter.SetColorFormatter(color.New(color.FgRed).Fprintf)
-	linter.RunLint(p, string(data), errWriter)
+	linter.RunLint(vm, p, string(data), errWriter)
 	if errWriter.ErrorsFound {
 		fmt.Fprintf(os.Stderr, "Problems found!\n")
 		ExitProblemsFound()

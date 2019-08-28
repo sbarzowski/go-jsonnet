@@ -21,6 +21,8 @@ import (
 	"io/ioutil"
 	"os"
 	"path"
+
+	"github.com/google/go-jsonnet/ast"
 )
 
 // An Importer imports data from a path.
@@ -82,6 +84,10 @@ func makeImportCache(importer Importer) *importCache {
 	}
 }
 
+func (cache *importCache) flushValueCache() {
+	cache.codeCache = make(map[string]potentialValue)
+}
+
 func (cache *importCache) importData(importedFrom, importedPath string) (contents Contents, foundAt string, err error) {
 	contents, foundAt, err = cache.importer.Import(importedFrom, importedPath)
 	if err != nil {
@@ -95,6 +101,17 @@ func (cache *importCache) importData(importedFrom, importedPath string) (content
 		cache.foundAtVerification[foundAt] = contents
 	}
 	return
+}
+
+func (cache *importCache) importAST(importedFrom, importedPath string) (ast.Node, string, error) {
+	// TODO(sbarzowski) perhaps we can cache the AST, so that we go through parsing twice
+	// when running additional analysis before running the program
+	contents, foundAt, err := cache.importData(importedFrom, importedPath)
+	if err != nil {
+		return nil, "", err
+	}
+	node, err := snippetToAST(foundAt, contents.String())
+	return node, foundAt, err
 }
 
 // ImportString imports a string, caches it and then returns it.

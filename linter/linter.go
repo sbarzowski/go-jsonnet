@@ -73,7 +73,7 @@ func Lint(node ast.Node, e *ErrorWriter) {
 	}
 }
 
-func RunLint(filename string, code string, errWriter *ErrorWriter) bool {
+func RunLint(vm *jsonnet.VM, filename string, code string, errWriter *ErrorWriter) bool {
 	node, err := jsonnet.SnippetToAST(filename, code)
 	if err != nil {
 		errWriter.writeError(err.(parser.StaticError)) // ugly but true
