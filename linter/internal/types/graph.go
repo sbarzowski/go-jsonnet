@@ -609,7 +609,7 @@ func prepareStdlib(g *typeGraph) {
 	})
 }
 
-func PrepareTypes(node ast.Node, typeOf ExprTypes, varAt map[ast.Node]*common.Variable) {
+func newGraph(varAt map[ast.Node]*common.Variable) *typeGraph {
 	g := typeGraph{
 		exprPlaceholder: make(map[ast.Node]placeholderID),
 		varAt:           varAt,
@@ -684,7 +684,13 @@ func PrepareTypes(node ast.Node, typeOf ExprTypes, varAt map[ast.Node]*common.Va
 
 	prepareStdlib(&g)
 
-	prepareTP(node, &g)
+	return &g
+}
+
+func PrepareTypes(node ast.Node, typeOf ExprTypes, varAt map[ast.Node]*common.Variable) {
+	g := newGraph(varAt)
+
+	prepareTP(node, g)
 
 	g.simplifyReferences()
 

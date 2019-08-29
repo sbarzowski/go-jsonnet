@@ -11,3 +11,7 @@ Perhaps files themselves could also be cached (somewhat unlike the way it works 
 
 Such a stateful Linter could be pretty neat. There is a problem however - it would need to contain VM
 and as such we get cache flushing problems. Perhaps "observer pattern" with VM informing registered things of its invalidation.
+
+Actually stateful Linter causes quite a lot of problems. The graph as currently implemented really doesn't like being extended multiple times. It is better to collect all of the files for which we want to do linting and then handle them in one go. This complicates the API a bit, but internally it's much easier to understand what's going on.
+
+We need to load the imports somehow, when we add file, all of the transitive depenencies...

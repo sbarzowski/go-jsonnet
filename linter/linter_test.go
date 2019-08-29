@@ -38,7 +38,12 @@ func runTest(t *testing.T, test *linterTest) {
 	}
 
 	// TODO(sbarzowski) record errorsFound
-	RunLint(test.name, string(input), errWriter)
+	// RunLint(test.name, string(input), errWriter)
+
+	vm := jsonnet.MakeVM()
+	l := NewLinter(vm, errWriter)
+	l.AddFile(test.name, string(input))
+	l.Check()
 
 	outData := outBuilder.String()
 
