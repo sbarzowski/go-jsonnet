@@ -8,7 +8,7 @@ import (
 
 type vScope map[ast.Identifier]*common.Variable
 
-func addVar(name ast.Identifier, loc ast.LocationRange, bindNode ast.Node, info *LintingInfo, scope vScope, varKind common.VariableKind) {
+func addVar(name ast.Identifier, loc ast.LocationRange, bindNode ast.Node, info *VariableInfo, scope vScope, varKind common.VariableKind) {
 	v := &common.Variable{
 		Name:         name,
 		BindNode:     bindNode,
@@ -28,7 +28,7 @@ func cloneScope(oldScope vScope) vScope {
 	return new
 }
 
-func findVariablesInFunc(node *ast.Function, info *LintingInfo, scope vScope) {
+func findVariablesInFunc(node *ast.Function, info *VariableInfo, scope vScope) {
 	// TODO(sbarzowski) right location range
 	for _, param := range node.Parameters.Required {
 		addVar(param, ast.LocationRange{}, nil, info, scope, common.VarParam)
@@ -42,7 +42,7 @@ func findVariablesInFunc(node *ast.Function, info *LintingInfo, scope vScope) {
 	findVariables(node.Body, info, scope)
 }
 
-func findVariablesInLocal(node *ast.Local, info *LintingInfo, scope vScope) {
+func findVariablesInLocal(node *ast.Local, info *VariableInfo, scope vScope) {
 	for _, bind := range node.Binds {
 		addVar(bind.Variable, bind.LocRange, bind.Body, info, scope, common.VarRegular)
 	}
@@ -57,7 +57,7 @@ func findVariablesInLocal(node *ast.Local, info *LintingInfo, scope vScope) {
 	findVariables(node.Body, info, scope)
 }
 
-func findVariablesInObject(node *ast.DesugaredObject, info *LintingInfo, scopeOutside vScope) {
+func findVariablesInObject(node *ast.DesugaredObject, info *VariableInfo, scopeOutside vScope) {
 	scopeInside := cloneScope(scopeOutside)
 	// if scopeInside["$"] == nil {
 	// 	addVar("$", node, node, info, scopeInside, common.VarDollarObject)
@@ -74,7 +74,7 @@ func findVariablesInObject(node *ast.DesugaredObject, info *LintingInfo, scopeOu
 	}
 }
 
-func findVariables(node ast.Node, info *LintingInfo, scope vScope) {
+func findVariables(node ast.Node, info *VariableInfo, scope vScope) {
 	switch node := node.(type) {
 	case *ast.Function:
 		newScope := cloneScope(scope)

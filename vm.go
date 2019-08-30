@@ -224,6 +224,14 @@ func (vm *VM) EvaluateSnippetMulti(filename string, snippet string) (files map[s
 	return
 }
 
+// ResolveImport finds the actual path where the imported file can be found.
+// It will cache the contents of the file immediately as well, to avoid the possibility of the file
+// disappearing after being checked.
+func (vm *VM) ResolveImport(importedFrom, importedPath string) (foundAt string, err error) {
+	_, foundAt, err = vm.importCache.importData(importedFrom, importedPath)
+	return
+}
+
 // ImportData fetches the data just as if it was imported from a Jsonnet file located at `importedFrom`.
 // It shares the cache with the actual evaluation.
 func (vm *VM) ImportData(importedFrom, importedPath string) (contents string, foundAt string, err error) {

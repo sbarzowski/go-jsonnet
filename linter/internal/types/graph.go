@@ -609,7 +609,7 @@ func prepareStdlib(g *typeGraph) {
 	})
 }
 
-func newGraph(varAt map[ast.Node]*common.Variable) *typeGraph {
+func NewTypeGraph(varAt map[ast.Node]*common.Variable) *typeGraph {
 	g := typeGraph{
 		exprPlaceholder: make(map[ast.Node]placeholderID),
 		varAt:           varAt,
@@ -687,11 +687,13 @@ func newGraph(varAt map[ast.Node]*common.Variable) *typeGraph {
 	return &g
 }
 
-func PrepareTypes(node ast.Node, typeOf ExprTypes, varAt map[ast.Node]*common.Variable) {
-	g := newGraph(varAt)
-
+func (g *typeGraph) AddToGraph(node ast.Node, varAt map[ast.Node]*common.Variable) {
+	g.varAt = varAt //  TODO(sbarzowski) hacky! If it changes, we shouldn't put it in typeGraph at all
 	prepareTP(node, g)
+}
 
+func (g *typeGraph) PrepareTypes(node ast.Node, typeOf ExprTypes, varAt map[ast.Node]*common.Variable) {
+	g.AddToGraph(node, varAt)
 	g.simplifyReferences()
 
 	g.separateElementTypes()
